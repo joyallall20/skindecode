@@ -1,0 +1,836 @@
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap");
+
+/* ==========================================================================
+   Page Variables & Base
+   ========================================================================== */
+
+.ppage {
+  --color-bg: #fdfaf7;
+  --color-surface: #ffffff;
+  --color-bg-soft: #fff2f7;
+  --color-ink: #15100f;
+  --color-ink-muted: #746b78;
+  --color-pink: #ff3d77;
+  --color-pink-soft: #e47796;
+  --color-pink-deep: #d71760;
+  --color-line: #eadde2;
+  --color-line-soft: #f4ecf0;
+
+  min-height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  overflow-x: hidden;
+}
+
+.ppage *,
+.ppage *::before,
+.ppage *::after {
+  box-sizing: border-box;
+}
+
+/* ==========================================================================
+   1. NAVBAR
+   ========================================================================== */
+
+.ppage__header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: rgba(253, 250, 247, 0.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.ppage__nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 16px clamp(20px, 4vw, 48px);
+  gap: 16px;
+}
+
+.ppage__logo {
+  font-family: "Instrument Serif", serif;
+  font-size: 26px;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  text-decoration: none;
+  font-weight: 400;
+  flex-shrink: 0;
+}
+
+.ppage__logo-dot {
+  color: var(--color-pink);
+}
+
+.ppage__nav-links {
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 3vw, 32px);
+}
+
+.ppage__nav-link {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+  text-decoration: none;
+  transition: color 0.18s ease;
+  padding: 4px 0;
+}
+
+.ppage__nav-link:hover {
+  color: var(--color-ink);
+}
+
+.ppage__nav-link--active {
+  color: var(--color-ink);
+  font-weight: 600;
+  border-bottom: 2px solid var(--color-pink);
+}
+
+.ppage__nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ppage__nav-profile-btn {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-pink-deep);
+  background: var(--color-bg-soft);
+  border: 1px solid rgba(255, 61, 119, 0.18);
+  padding: 6px 14px;
+  border-radius: 999px;
+  text-decoration: none;
+  transition: all 0.18s ease;
+}
+
+.ppage__nav-profile-btn:hover {
+  background: #ffe3ee;
+}
+
+.ppage__nav-login {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+  padding: 6px 16px;
+  border: 1px solid var(--color-ink);
+  border-radius: 999px;
+  text-decoration: none;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.ppage__nav-login:hover {
+  background: var(--color-ink);
+  color: #fff;
+}
+
+/* ==========================================================================
+   2. USER SKIN PROFILE SECTION
+   ========================================================================== */
+
+.ppage__profile {
+  background: linear-gradient(
+    180deg,
+    #fff2f7 0%,
+    rgba(253, 250, 247, 0.6) 100%
+  );
+  border-bottom: 1px solid var(--color-line);
+  padding: clamp(32px, 5vw, 48px) clamp(20px, 4vw, 48px);
+}
+
+.ppage__profile--neutral {
+  background: var(--color-bg);
+  padding: clamp(24px, 4vw, 36px) clamp(20px, 4vw, 48px);
+}
+
+.ppage__profile-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.ppage__profile-eyebrow {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-pink-deep);
+}
+
+.ppage__profile-headline {
+  margin: 0 0 8px;
+  font-family: "Instrument Serif", serif;
+  font-size: clamp(28px, 4vw, 40px);
+  font-style: italic;
+  font-weight: 400;
+  color: var(--color-ink);
+}
+
+.ppage__profile-sub {
+  margin: 0 auto 18px;
+  font-size: 14px;
+  color: var(--color-ink-muted);
+  max-width: 520px;
+  line-height: 1.55;
+}
+
+.ppage__profile-metrics {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0 14px;
+}
+
+.ppage__profile-card {
+  background: #ffffff;
+  border: 1px solid var(--color-line);
+  border-radius: 16px;
+  padding: 12px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  box-shadow: 0 4px 14px rgba(21, 16, 15, 0.03);
+  min-width: 140px;
+}
+
+.ppage__profile-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-ink-muted);
+  font-weight: 500;
+}
+
+.ppage__profile-card-value {
+  font-family: "Instrument Serif", serif;
+  font-size: 20px;
+  font-style: italic;
+  color: var(--color-ink);
+}
+
+.ppage__profile-note {
+  margin: 10px 0 14px;
+  font-size: 13.5px;
+  color: var(--color-ink-muted);
+}
+
+.ppage__profile-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.ppage__profile-retake {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-pink-deep);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  transition: all 0.18s ease;
+}
+
+.ppage__profile-retake:hover {
+  background: rgba(255, 61, 119, 0.08);
+}
+
+.ppage__profile-cta {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-ink);
+  padding: 10px 22px;
+  border-radius: 999px;
+  text-decoration: none;
+  transition: opacity 0.18s ease;
+}
+
+.ppage__profile-cta:hover {
+  opacity: 0.9;
+}
+
+/* ==========================================================================
+   3. PRODUCT TYPE CIRCLES
+   ========================================================================== */
+
+.ppage__cats-container {
+  border-bottom: 1px solid var(--color-line);
+  padding: 22px clamp(16px, 4vw, 48px);
+  background: var(--color-surface);
+}
+
+.ppage__cats-track {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(14px, 2.5vw, 24px);
+  max-width: 1360px;
+  margin: 0 auto;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ppage__cats-track::-webkit-scrollbar {
+  height: 4px;
+}
+
+.ppage__cats-track::-webkit-scrollbar-thumb {
+  background-color: var(--color-line);
+  border-radius: 4px;
+}
+
+.ppage__cat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  transition: transform 0.18s ease;
+}
+
+.ppage__cat-item:hover {
+  transform: translateY(-2px);
+}
+
+.ppage__cat-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #fbf7f9;
+  border: 1.5px solid var(--color-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  transition: all 0.22s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+}
+
+.ppage__cat-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+  white-space: nowrap;
+  transition: color 0.18s ease;
+}
+
+.ppage__cat-item--active .ppage__cat-circle {
+  background: var(--color-bg-soft);
+  border-color: var(--color-pink);
+  box-shadow: 0 0 0 3px rgba(255, 61, 119, 0.18);
+}
+
+.ppage__cat-item--active .ppage__cat-name {
+  color: var(--color-pink-deep);
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   4. MAIN CATALOG LAYOUT
+   ========================================================================== */
+
+.ppage__catalog-layout {
+  display: flex;
+  align-items: flex-start;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 32px clamp(16px, 4vw, 48px) 72px;
+  gap: clamp(24px, 3.5vw, 44px);
+}
+
+/* Left Sidebar (Desktop) */
+.ppage__sidebar-desktop {
+  width: 250px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 80px;
+}
+
+.ppage__sidebar {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 20px;
+  padding: 22px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.pside__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+.pside__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.01em;
+}
+
+.pside__clear-btn {
+  background: none;
+  border: none;
+  color: var(--color-pink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pside__clear-btn:hover {
+  text-decoration: underline;
+}
+
+.pside__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pside__heading {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-ink);
+}
+
+/* Sidebar Search */
+.pside__search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.pside__search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--color-ink-muted);
+  pointer-events: none;
+}
+
+.pside__search-input {
+  width: 100%;
+  padding: 9px 12px 9px 34px;
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--color-ink);
+  background: #fff;
+  outline: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.pside__search-input:focus {
+  border-color: var(--color-pink);
+  box-shadow: 0 0 0 3px rgba(255, 61, 119, 0.1);
+}
+
+/* Sidebar Budget */
+.pside__budget-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pside__budget-field {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.pside__budget-currency {
+  position: absolute;
+  left: 10px;
+  font-size: 13px;
+  color: var(--color-ink-muted);
+  pointer-events: none;
+}
+
+.pside__budget-input {
+  width: 100%;
+  padding: 8px 8px 8px 24px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--color-ink);
+  background: #fff;
+  outline: none;
+  transition: border-color 0.18s ease;
+}
+
+.pside__budget-input:focus {
+  border-color: var(--color-pink);
+}
+
+.pside__budget-sep {
+  color: var(--color-ink-muted);
+  font-size: 14px;
+}
+
+/* Sidebar Brand */
+.pside__brand-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.pside__brand-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--color-ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pside__brand-radio {
+  accent-color: var(--color-pink);
+  cursor: pointer;
+}
+
+.pside__brand-text {
+  transition: color 0.18s ease;
+}
+
+.pside__brand-label:hover .pside__brand-text {
+  color: var(--color-pink-deep);
+}
+
+/* Right Main Content */
+.ppage__main-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.ppage__results-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  font-size: 13.5px;
+  color: var(--color-ink-muted);
+}
+
+.ppage__results-count {
+  font-weight: 500;
+}
+
+.ppage__clear-link {
+  background: none;
+  border: none;
+  color: var(--color-pink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ppage__clear-link:hover {
+  text-decoration: underline;
+}
+
+/* Product Grid Adjustments */
+.pgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 22px;
+}
+
+.ppage__error {
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  color: #991b1b;
+  padding: 14px 18px;
+  border-radius: 12px;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+/* Load More */
+.ppage__load-more-wrap {
+  display: flex;
+  justify-content: center;
+  margin-top: 48px;
+}
+
+.ppage__load-more-btn {
+  padding: 13px 36px;
+  border: 1px solid var(--color-ink);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--color-ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.ppage__load-more-btn:hover {
+  background: var(--color-ink);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.ppage__load-more-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ==========================================================================
+   5. MOBILE RESPONSIVE & DRAWER
+   ========================================================================== */
+
+.ppage__mobile-filter-bar {
+  display: none;
+  padding: 12px clamp(16px, 4vw, 48px);
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.ppage__mobile-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.ppage__mobile-trigger--active {
+  border-color: var(--color-pink);
+  background: var(--color-bg-soft);
+  color: var(--color-pink-deep);
+}
+
+.ppage__drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(21, 16, 15, 0.4);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ppage__drawer-sheet {
+  width: 100%;
+  max-width: 320px;
+  height: 100%;
+  background: var(--color-surface);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+.ppage__drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.ppage__drawer-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.ppage__drawer-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.ppage__drawer-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.ppage__drawer-content .ppage__sidebar {
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .ppage__sidebar-desktop {
+    display: none;
+  }
+
+  .ppage__mobile-filter-bar {
+    display: block;
+  }
+
+  .ppage__catalog-layout {
+    padding-top: 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ppage__nav-links {
+    display: none;
+  }
+
+  .pgrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+}
+
+/* ==========================================================================
+   6. ONBOARDING WELCOME MODAL
+   ========================================================================== */
+
+.ppage__modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(21, 16, 15, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.ppage__modal {
+  width: 100%;
+  max-width: 440px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid var(--color-line);
+  border-radius: 24px;
+  box-shadow: 0 24px 64px rgba(21, 16, 15, 0.18);
+  padding: 36px 32px;
+  text-align: center;
+}
+
+.ppage__modal-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-pink);
+  margin: 0 0 12px;
+}
+
+.ppage__modal-heading {
+  font-family: "Instrument Serif", serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(32px, 6vw, 42px);
+  line-height: 1.1;
+  color: var(--color-ink);
+  margin: 0 0 14px;
+}
+
+.ppage__modal-body {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-ink-muted);
+  margin: 0 auto 28px;
+  max-width: 34ch;
+}
+
+.ppage__modal-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.ppage__modal-primary {
+  width: 100%;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-ink);
+  border: none;
+  border-radius: 999px;
+  padding: 14px 24px;
+  min-height: 48px;
+  cursor: pointer;
+  transition: opacity 0.18s ease;
+}
+
+.ppage__modal-primary:hover {
+  opacity: 0.9;
+}
+
+.ppage__modal-secondary {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+  text-decoration: underline;
+  text-decoration-color: var(--color-line);
+  text-underline-offset: 4px;
+  transition: color 0.18s ease;
+}
+
+.ppage__modal-secondary:hover {
+  color: var(--color-ink);
+}

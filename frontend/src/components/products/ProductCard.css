@@ -1,0 +1,203 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap');
+
+/* ---- Product Image (shared) ---- */
+
+.product-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.product-image--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #fff2f7 0%, #f3e8f8 100%);
+}
+
+.product-image__initials {
+  font-family: 'Instrument Serif', serif;
+  font-size: 2.2rem;
+  color: #d76ea0;
+  user-select: none;
+}
+
+/* ---- Card ---- */
+
+.pcard {
+  background: #fff;
+  border: 1px solid #f0e3ea;
+  border-radius: 20px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 0.22s ease;
+  outline: none;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+}
+
+.pcard:hover,
+.pcard:focus-visible {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px -8px rgba(180, 80, 130, 0.14);
+  border-color: #f5c2d8;
+}
+
+.pcard:focus-visible {
+  outline: 2px solid #ff3d77;
+  outline-offset: 2px;
+}
+
+/* ---- Image area ---- */
+
+.pcard__image-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  background: linear-gradient(135deg, #fff2f7 0%, #f5eaf8 100%);
+  flex-shrink: 0;
+}
+
+.pcard__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pcard:hover .pcard__image {
+  transform: scale(1.04);
+}
+
+/* Quality score badge — moved to top-LEFT so it doesn't collide with the
+   rating badge, which now owns the top-right corner of the image. */
+.pcard__score {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #15100f;
+  border: 1px solid rgba(255, 61, 119, 0.2);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+/* ---- Card body ---- */
+
+.pcard__body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.pcard__brand {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #9c7a8a;
+}
+
+.pcard__name {
+  margin: 0;
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 1.05rem;
+  line-height: 1.3;
+  color: #15100f;
+}
+
+.pcard__category {
+  font-size: 11px;
+  color: #c06090;
+  font-weight: 500;
+}
+
+/* Key ingredient pills */
+.pcard__ingredients {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pcard__ingredient-pill {
+  font-size: 10px;
+  padding: 3px 8px;
+  background: #fff2f7;
+  border: 1px solid #fad4e4;
+  border-radius: 999px;
+  color: #a0426e;
+  font-weight: 500;
+}
+
+/* Clean/safe badges */
+.pcard__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.pcard__badge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+  text-transform: uppercase;
+}
+
+/* ---- Skeleton card ---- */
+
+.pcard--skeleton {
+  pointer-events: none;
+  border-color: #f5edf1;
+}
+
+.pcard--skeleton .pcard__image-wrap {
+  background: linear-gradient(90deg, #f5edf1 25%, #fde8ef 50%, #f5edf1 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.pcard--skeleton .pcard__brand,
+.pcard--skeleton .pcard__name,
+.pcard--skeleton .pcard__category {
+  background: linear-gradient(90deg, #f5edf1 25%, #fde8ef 50%, #f5edf1 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+  color: transparent;
+  user-select: none;
+}
+
+.pcard--skeleton .pcard__brand { width: 40%; height: 10px; }
+.pcard--skeleton .pcard__name { width: 80%; height: 20px; }
+.pcard--skeleton .pcard__category { width: 55%; height: 11px; }
+
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

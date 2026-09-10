@@ -1,0 +1,15 @@
+/*
+  Styling for OnboardingPage now lives in Tailwind utility classes
+  directly on the JSX. This file only holds the handful of things
+  Tailwind utilities can't express cleanly.
+*/
+
+/* Respect reduced-motion preferences globally for this page,
+   as a fallback alongside the useReducedMotion() checks in JSX. */
+@media (prefers-reduced-motion: reduce) {
+  .onboarding * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

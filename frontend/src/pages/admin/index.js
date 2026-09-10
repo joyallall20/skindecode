@@ -1,0 +1,9 @@
+export { default as AdminDashboardPage } from './AdminDashboardPage.jsx';
+export { default as AdminAddProductPage } from './AdminAddProductPage.jsx';
+export { default as AdminProductEditPage } from './AdminProductEditPage.jsx';
+export { default as AdminProductsPage } from './AdminProductsPage.jsx';
+export { default as AdminImportsPage } from './AdminImportsPage.jsx';
+export { default as AdminProductDetailPage } from './AdminProductDetailPage.jsx';
+export { default as AdminImportDetailPage } from './AdminImportDetailPage.jsx';
+export { default as AdminIntelligenceTestPage } from './AdminIntelligenceTestPage.jsx';
+export { default as AdminKnowledgePage } from './AdminKnowledgePage.jsx';

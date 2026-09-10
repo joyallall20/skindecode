@@ -1,0 +1,814 @@
+# POST-IMPLEMENTATION VERIFICATION AUDIT
+
+Audit date: 2026-09-06
+Scope: Read-only source audit of the skincare SaaS backend and frontend.
+No application files were modified during this audit. This report is the only
+file created.
+
+## Executive Verdict
+
+PASS WITH ISSUES
+
+The principal workflow exists end to end: Firecrawl (when configured) fetches
+pages, Groq extracts structured data, admins can edit an import, products can
+be saved as inactive catalog drafts, sellers can be discovered through
+Firecrawl search, offers can be managed, Gemini can generate product
+intelligence, admins can approve it, and deterministic matching can produce
+recommendations with Groq explanation/validation and caching.
+
+The verdict is not a full PASS because several important guarantees are
+conditional or incomplete: Firecrawl has a raw-fetch fallback and URL fetching
+has SSRF exposure; the import schema drops several extracted fields; seller
+variant/size/identifier matching is AI-only rather than enforced; offer
+affiliate gating can be bypassed by admin APIs; product edits do not invalidate
+intelligence or explanation caches; budget is mixed into the legacy scoring
+function and excluded from explanation cache identity; cache locking can still
+duplicate generation; and Evidence is not connected to intelligence or
+matching.
+
+## Critical Findings
+
+### 1. Arbitrary URL fetching is SSRF-prone
+
+- Severity: HIGH
+- Component: Product extraction and seller discovery
+- File: `backend/src/controllers/productImportController.js`,
+  `backend/src/services/productExtractionService.js`,
+  `backend/src/services/firecrawlService.js`
+- Function: `createProductImport`, `extractProductFromImportUrl`,
+  `fetchPageContent`, `fetchUrlContentLegacy`, `scrapeUrlToMarkdown`,
+  `searchWeb`
+- What the code actually does: It accepts any string beginning with
+  `http://` or `https://` and stores it. If Firecrawl is configured it sends
+  the URL to Firecrawl. If Firecrawl fails or is not configured, the backend
+  performs `fetch(url, { redirect: 'follow' })` itself. There is no hostname
+  allowlist, private-address check, DNS rebinding defense, redirect validation,
+  or content-type restriction.
+- Expected behavior: Product imports should only fetch permitted public
+  retailer/product URLs and should prevent access to internal services,
+  localhost, link-local, metadata, and private network addresses.
+- Gap: A privileged admin request can cause the backend to fetch arbitrary
+  internal or external URLs. Redirects are followed without revalidation.
+- Recommended fix: Validate URL schemes and hostnames, resolve and reject
+  private/link-local/loopback/reserved IPs at connection time, revalidate every
+  redirect, impose response-size/content-type limits, and preferably remove
+  the raw server-side fallback unless it has equivalent controls.
+
+### 2. Extracted identity fields are dropped by persistence schema
+
+- Severity: HIGH
+- Component: Product extraction/import persistence
+- File: `backend/src/models/ProductImport.js`,
+  `backend/src/controllers/productImportController.js`
+- Function: `extractProductFromImportUrl`, `getSanitizedExtractedData`
+- What the code actually does: The extraction schema and sanitizer produce
+  `variant`, `size`, `quantity`, `claims`, `currency`, `inStock`, `sku`,
+  `upc`, `ean`, `gtin`, `mpn`, and `retailerProductId`. The nested
+  `ProductImport.extractedData` Mongoose schema defines none of those fields
+  except `price` and `retailer`. With strict nested schemas, those fields are
+  not reliably persisted. The frontend form also does not render them.
+- Expected behavior: All extracted identity, variant, quantity, identifier,
+  pricing, and claim fields should survive extraction, editing, and save.
+- Gap: The advertised extraction contract is broader than the actual stored
+  and editable contract. Canonical identity may therefore be computed from
+  incomplete data.
+- Recommended fix: Add the fields to the import schema and frontend form,
+  validate them server-side, and test round-trip persistence.
+
+### 3. Affiliate gating is not enforced by all admin/customer paths
+
+- Severity: HIGH
+- Component: Product offers
+- File: `backend/src/controllers/productOfferController.js`,
+  `backend/src/utils/offerPresentation.js`,
+  `backend/src/controllers/productClickController.js`,
+  `backend/src/controllers/anonymousAnalysisController.js`
+- Function: `createProductOffer`, `updateProductOffer`,
+  `sanitizeOffersForCustomer`, `trackProductClick`, `analyzeAnonymously`
+- What the code actually does: New offers without `affiliateUrl` are
+  initially inactive. However, `updateProductOffer` accepts arbitrary
+  `isActive` and `linkType` combinations, so an admin can activate a direct
+  offer without an affiliate URL. Customer offer sanitization deliberately
+  allows active direct offers (`offer.affiliateUrl || offer.linkType ===
+  'direct'`). Anonymous analysis returns `offer.url` directly. Click tracking
+  checks only `isActive`, not affiliate URL.
+- Expected behavior: Customer-purchasable offers should be exposed/clickable
+  only after an affiliate URL exists; original/internal URLs must remain
+  admin-only.
+- Gap: The normal UI follows the intended gate, but API state can bypass it.
+- Recommended fix: Enforce `affiliateUrl` server-side whenever an offer is
+  active/customer-facing; remove direct customer fallback if affiliate-only
+  is required; make click tracking require an affiliate URL; always return a
+  sanitized customer URL.
+
+### 4. Product source URLs leak through customer product APIs
+
+- Severity: HIGH
+- Component: Customer/admin response separation
+- File: `backend/src/models/Product.js`,
+  `backend/src/controllers/productController.js`
+- Function: `getProducts`, `getProductById`
+- What the code actually does: `Product.sourceUrl` is stored as the original
+  imported retailer URL and products are returned as full lean documents.
+  Unlike offers, product responses do not project or sanitize `sourceUrl`.
+- Expected behavior: Original/admin URLs should never reach customer APIs.
+- Gap: Public product list/detail responses can expose the source URL even
+  when offer presentation is sanitized.
+- Recommended fix: Use explicit customer projections/DTOs that omit
+  `sourceUrl`, `canonicalIdentityHash`, internal review metadata, and other
+  admin fields.
+
+### 5. Product edits do not invalidate intelligence or explanation caches
+
+- Severity: HIGH
+- Component: Catalog editing and cache invalidation
+- File: `backend/src/controllers/productController.js`,
+  `backend/src/services/invalidationService.js`
+- Function: `updateProduct`, `generateProductIntelligenceForProduct`,
+  `invalidateExplanationsForProduct`,
+  `invalidateExplanationsForIntelligenceChange`
+- What the code actually does: Intelligence regeneration resets review state
+  and invalidates explanations. `updateProduct` changes allowed product fields
+  without clearing `productIntelligence`, changing `intelligenceStatus`, or
+  calling invalidation. Offer price, affiliate URL, and stock changes also do
+  not invalidate explanation caches.
+- Expected behavior: Finalized product changes that affect intelligence or
+  matching should make prior intelligence/reasons stale; offer-only changes
+  should invalidate only price/constraint-dependent outputs if those outputs
+  depend on them.
+- Gap: An approved intelligence document can remain approved after source
+  product data changes, and cached explanations can describe old data.
+- Recommended fix: Define product-field impact classes, reset/regenerate
+  intelligence on relevant edits, and invalidate only affected cache entries.
+
+### 6. Explanation cache identity omits budget while explanation includes budget
+
+- Severity: HIGH
+- Component: Personalized explanation cache
+- File: `backend/src/services/profileCanonicalizationService.js`,
+  `backend/src/services/explanationCacheService.js`
+- Function: `buildCanonicalProfile`, `computeCanonicalProfileHash`,
+  `getOrGenerateExplanation`
+- What the code actually does: Canonicalization explicitly excludes `budget`.
+  Matching uses price/budget and the explanation cache stores `withinBudget`
+  and includes it in the generated match result, but two profiles differing
+  only in budget share the same `canonicalProfileHash` and cache row.
+- Expected behavior: Cache identity must include every profile/constraint that
+  can change the explanation, or explanation generation must exclude that
+  constraint.
+- Gap: A user can receive an explanation generated for another budget.
+- Recommended fix: Include normalized budget and any other explanation inputs
+  in the canonical profile, or separate budget eligibility messaging from the
+  cached explanation.
+
+### 7. Concurrent cache generation can still duplicate AI calls
+
+- Severity: MEDIUM
+- Component: Explanation cache concurrency
+- File: `backend/src/services/explanationCacheService.js`
+- Function: `getOrGenerateExplanation`
+- What the code actually does: It attempts a MongoDB generation lock. A
+  contender waits ten seconds, but if no completed row appears it continues
+  into generation rather than returning/retrying with a definitive lock.
+  Concurrent upserts can also race on the unique compound index.
+- Expected behavior: Exactly one generator should call Groq for a given
+  product/profile/version key, with other requests waiting or receiving a
+  controlled retry.
+- Gap: Slow generations can lead to duplicate Groq calls and duplicate writes.
+- Recommended fix: Use an atomic lock record with duplicate-key handling,
+  bounded lease renewal/expiry, and return a retryable result after the wait
+  rather than generating without ownership.
+
+### 8. Seller exact-match guarantees are not deterministic
+
+- Severity: HIGH
+- Component: Seller discovery and matching
+- File: `backend/src/services/sellerDiscoveryService.js`,
+  `backend/src/models/SellerDiscoveryCandidate.js`
+- Function: `buildSearchQuery`, `matchSellerProduct`, `discoverSellers`
+- What the code actually does: Firecrawl search queries include brand, name,
+  variant, size, and retailer site. Search result markdown is optionally
+  scraped and then Groq returns `sameProduct`, confidence, variantMatch, and
+  sizeMatch. The backend validates only that `sameProduct` and numeric
+  confidence exist; it does not enforce confidence >= 0.75, exact variant,
+  exact size/quantity, or identifier equality. The schema stores only candidate
+  `sku` and `gtin` in the generated candidate data, despite the broader
+  identifier model.
+- Expected behavior: Candidate acceptance should enforce deterministic identity
+  rules, using identifiers where present and rejecting variant/size mismatch.
+- Gap: AI can label a mismatch as the same product and the API accepts it.
+- Recommended fix: Normalize and compare identifiers/variant/size/quantity
+  server-side; use AI only for ambiguous evidence and require explicit review
+  for conflicts.
+
+### 9. Import publish endpoint bypasses the explicit import approval gate
+
+- Severity: MEDIUM
+- Component: Import workflow
+- File: `backend/src/controllers/productImportController.js`
+- Function: `publishImportedProduct`
+- What the code actually does: It allows status `approved` OR `review`, creates
+  the inactive catalog product, then sets the import status to `approved`.
+  The frontend's “Save to Catalog” action calls this endpoint before
+  intelligence generation.
+- Expected behavior: If import approval is a distinct review gate, publishing
+  should require `approved`; if saving a draft is intentionally separate, the
+  endpoint should use a distinct draft/catalog transition.
+- Gap: The status name implies approval but the review status is sufficient,
+  and the endpoint silently changes it to approved.
+- Recommended fix: Separate “save catalog draft” from “approve import”, or
+  enforce the documented state transition explicitly.
+
+### 10. Required preferences become hard conflicts only inside high sensitivity
+
+- Severity: HIGH
+- Component: Deterministic matching
+- File: `backend/src/services/recommendationScoringService.js`
+- Function: `scoreProductCompatibility`
+- What the code actually does: The preference conflict/unknown logic is
+  nested inside `if (profile.sensitivity === 'high' ...)`. For low/medium
+  sensitivity, must-have preferences do not create conflict markers. The
+  separate matching engine therefore cannot mark them ineligible in those
+  profiles.
+- Expected behavior: Must-have user constraints should be evaluated for every
+  profile, independently of sensitivity.
+- Gap: `fragrance-free`, vegan, cruelty-free, or reef-safe requirements can be
+  ignored unless sensitivity is high.
+- Recommended fix: Move preference eligibility evaluation outside the
+  sensitivity-specific block and distinguish unknown from confirmed conflict.
+
+## Architecture Verification Matrix
+
+| Area | Status | Evidence | File(s) |
+|---|---|---|---|
+| Firecrawl extraction | PARTIAL | Used when `FIRECRAWL_API_KEY` exists; raw fetch fallback otherwise | `backend/src/services/productExtractionService.js`, `backend/src/services/firecrawlService.js` |
+| Groq extraction | PASS WITH ISSUES | `generateGroqJSON(modelKey: extraction)` receives Firecrawl/legacy content; Gemini fallback on Groq failure | `backend/src/services/productExtractionService.js`, `backend/src/services/groqService.js` |
+| Canonical identity | PARTIAL | SHA-256 identity uses GTIN/EAN/UPC alone, otherwise brand/name/category/variant/size/quantity | `backend/src/services/productIdentityService.js` |
+| Seller discovery | PASS WITH ISSUES | Firecrawl `/search`, optional scrape, then Groq classification across active retailers | `backend/src/services/sellerDiscoveryService.js`, `backend/src/services/firecrawlService.js` |
+| Offer separation | PARTIAL | ProductOffer stores multiple retailer offers and original/affiliate fields; product source URL still leaks | `backend/src/models/ProductOffer.js`, `backend/src/utils/offerPresentation.js`, `backend/src/controllers/productController.js` |
+| Affiliate gating | PARTIAL | Create path defaults no-affiliate offers inactive, but update/customer/click paths allow direct active offers | `backend/src/controllers/productOfferController.js`, `backend/src/controllers/productClickController.js` |
+| Gemini intelligence | PASS | Explicit product endpoint calls `generateProductIntelligence` using saved product data | `backend/src/controllers/productController.js`, `backend/src/services/productIntelligenceService.js` |
+| Intelligence approval | PASS WITH ISSUES | Approval requires explanation plus ingredient analysis; regeneration clears review; reject is a status only | `backend/src/controllers/productController.js` |
+| Publish gate | PASS WITH ISSUES | Product publish requires intelligence and approved status; import draft endpoint allows review status | `backend/src/controllers/productController.js`, `backend/src/controllers/productImportController.js` |
+| Deterministic matching | PASS WITH ISSUES | `computeProductMatch` wraps deterministic scorer; Gemini may rerank eligible candidates | `backend/src/services/matchingEngineService.js`, `backend/src/services/recommendationService.js` |
+| Budget separation | PARTIAL | New matching engine separates budget, but legacy scorer and anonymous analysis score budget directly | `backend/src/services/matchingEngineService.js`, `backend/src/services/recommendationScoringService.js`, `backend/src/controllers/anonymousAnalysisController.js` |
+| Profile canonicalization | PASS WITH ISSUES | Arrays, allergies, avoided ingredients normalized/sorted; budget/categories/completion excluded | `backend/src/services/profileCanonicalizationService.js` |
+| Explanation cache | PASS WITH ISSUES | Product + profile hash + four version fields; Groq on miss, validator afterward | `backend/src/services/explanationCacheService.js`, `backend/src/models/ProductExplanationCache.js` |
+| Concurrency protection | PARTIAL | Mongo lock and wait loop exist, but timeout path can generate without lock ownership | `backend/src/services/explanationCacheService.js` |
+| Versioning | PARTIAL | Intelligence, knowledge, matching, prompt, extraction, seller prompt constants exist; model version is stored per cache row | `backend/src/constants/intelligenceVersions.js`, `backend/src/models/ProductExplanationCache.js` |
+| Invalidation | PARTIAL | Intelligence regeneration invalidates; product/offer edits and version functions are not wired to normal update paths | `backend/src/services/invalidationService.js`, `backend/src/controllers/productController.js` |
+| Evidence architecture | PARTIAL | Evidence model has source/reference/date/strength/version/notes and ingredient relation, but no product/intelligence relation or active service path | `backend/src/models/Evidence.js` |
+| Security | FAIL WITH ISSUES | Firebase token/admin checks exist; URL SSRF, source URL leakage, and permissive offer activation remain | `backend/src/middleware/authMiddleware.js`, `backend/src/middleware/adminMiddleware.js`, extraction/offer controllers |
+| Frontend workflow | PARTIAL | Import detail wires edit/save/discovery/offers/intelligence/approval/publish; form omits many extracted fields and some saves ignore editable fields | `frontend/src/pages/AdminImportDetailPage.jsx`, `frontend/src/pages/AdminProductDetailPage.jsx`, `frontend/src/components/admin/ProductDataForm.jsx` |
+| Backward compatibility | PASS WITH ISSUES | Legacy `/admin/imports` routes remain; response DTO separation is not consistent and old direct-offer behavior remains possible | `frontend/src/routes/AppRoutes.jsx`, `backend/src/controllers/productOfferController.js`, `backend/src/controllers/productController.js` |
+| Tests | FAIL | Targeted scripts pass, but default backend `npm test` exits 1 and there are no real automated API/integration tests | `backend/package.json`, `backend/scripts/test-profile-canonicalization.js`, `backend/scripts/test-matching-engine.js` |
+
+## SkinProfile Field Audit
+
+| Field | Used? | Where? | Affects eligibility? | Affects compatibility? | Affects ranking? | Notes |
+|---|---|---|---|---|---|---|
+| skinType | YES | Scorer skin-type compatibility and listed skin types | Indirectly | YES | YES | Also used in matching-engine dimension score |
+| sensitivity | YES | Scorer suitability, high-sensitivity flags/preferences | NO directly | YES | YES | Preference logic is incorrectly nested under high sensitivity |
+| morningSkinFeel | PARTIAL | Hydration/oil-control branch in scorer | NO | YES | YES | Only reached inside the sensitivity-known block |
+| afterMoisturizerFeel | NO | Only schema/controller persistence | NO | NO | NO | No scoring reference found |
+| responseToNewProducts | PARTIAL | Reactive-skin bonus in scorer | NO | YES | YES | Only evaluated in high-sensitivity branch |
+| sunscreenHabit | PARTIAL | Sunscreen category bonus | NO | YES | YES | Only evaluated in sensitivity-known branch |
+| ageRange | NO | Stored and included in snapshots | NO | NO | NO | Test matrix reports existence, not production scoring |
+| currentProducts | PARTIAL | Routine/category overlap bonus/penalty | NO | YES | YES | Only evaluated in sensitivity-known branch |
+| primaryGoal | PARTIAL | Goal concern score in matching engine; goal concern bonus in scorer | NO | YES | YES | Base score goal bonus is inside sensitivity branch |
+| concerns | YES | Concern compatibility, brand concerns, ingredient benefits | NO | YES | YES | Core compatibility input |
+| allergies | YES | Ingredient term matching; hard conflict in matching engine | YES | YES | YES | Direct scorer caps score at 12; matching engine sets eligible false |
+| avoidedIngredients | YES | Ingredient matching, avoidance signals, canonical hash | YES | YES | YES | Requires populated names/aliases for strongest matching |
+| mustHavePreferences | PARTIAL | Preference checks and matching-engine dimension | PARTIAL | YES | YES | Hard conflict only when nested high-sensitivity branch executes |
+| budget | PARTIAL | Price warning/constraint in matching engine; direct score bonus/penalty elsewhere | NO | NO in matching engine; YES in legacy scorer | YES | Excluded from explanation cache identity |
+| preferredProductCategories | YES | Mongo catalog filter before scoring | NO | NO | YES | Filters candidate set, not score |
+| questionnaireCompleted | NO | Validation/persistence only | NO | NO | NO | Not required by recommendation service |
+| onboardingAnswers | PARTIAL | Avoided ingredient extraction; copied into snapshots | Indirectly | PARTIAL | PARTIAL | Only avoided ingredient keys affect scoring |
+
+## Product Extraction Verification
+
+Actual chain:
+
+`POST /api/product-imports`
+-> `createProductImport`
+-> `POST /api/product-imports/:id/extract`
+-> `extractProductFromImportUrl`
+-> `fetchPageContent`
+-> Firecrawl `/scrape` when configured, otherwise legacy `fetch`
+-> `runStructuredExtraction`
+-> Groq JSON extraction when configured
+-> Gemini JSON fallback if Groq is unavailable/fails
+-> normalization and required-field validation
+-> `ProductImport.extractedData`
+-> frontend review.
+
+The extraction schema includes name, brand, category, description, variant,
+size, quantity, claims, images, ingredients, keyIngredients, skinTypes,
+concerns, boolean attributes, price, currency, stock, retailer, and several
+identifiers. Groq responses are parsed as JSON, fenced JSON is supported, and
+validation rejects malformed or incomplete objects. Gemini has equivalent JSON
+parsing/schema validation.
+
+Fallback is not a neutral provider fallback: Firecrawl failure falls back to a
+direct backend fetch; Groq failure falls back to Gemini; no configured AI
+provider returns a failed/not-configured import. Errors are stored in
+`ProductImport.errorMessage`, and raw AI response/text is stored for admin
+review. The main safety weakness is SSRF and the main data correctness
+weakness is the import schema dropping fields listed above.
+
+## Product Save / Catalog Verification
+
+`AdminAddProductPage.handleImportSubmit` calls
+`createProductImport` then `extractProductFromImport` and navigates to the
+import detail page. `AdminImportDetailPage` uses `ProductDataForm` and calls
+`updateExtractedProduct` for edits. “Save to Catalog” saves the edited
+extracted data and calls `publishImportedProduct`, which creates/upserts Brand,
+Category, Ingredient, Product, and an optional inactive ProductOffer.
+
+Canonical identity is generated by `computeCanonicalIdentityHash`. With no
+GTIN/EAN/UPC, variant, size, and quantity are included, so different sizes and
+variants do not merge under that fallback. If a GTIN/EAN/UPC is present, that
+identifier alone wins and variant/size/quantity are ignored. Retailer is not
+part of identity, which allows multiple retailer offers for one Product.
+Price is not part of Product identity or Product intelligence input; it is
+stored in ProductOffer/import data.
+
+The catalog upsert is not transactional. Partial writes to brand/category/
+ingredients/product/offer can leave inconsistent state if a later write fails.
+
+## Seller Discovery Verification
+
+Discovery is active web search when Firecrawl is configured:
+
+`runSellerDiscovery`
+-> `discoverSellers`
+-> active Retailer query (`isActive` and `discoveryConfig.enabled`)
+-> `buildSearchQuery`
+-> Firecrawl `/search` with `site:` domain filter
+-> optional Firecrawl scrape of each result
+-> Groq `matchSellerProduct`
+-> SellerDiscoveryCandidate upsert.
+
+`Retailer.discoveryConfig` fields are `enabled`, `domain`, `searchUrlTemplate`,
+and `country`. `domain` and `country` are used. `searchUrlTemplate` is never
+used. This is not limited to URLs/content already on the original product
+page, because it calls Firecrawl search independently.
+
+Candidate review is admin-only and supports discovered/accepted/rejected/
+offer_created statuses. Accepting a product-linked candidate can create an
+offer; accepting an import-only candidate does not create an offer until a
+product ID exists. Exact variant, size, quantity, and identifier equality are
+not enforced by backend rules; they are only requested from Groq.
+
+## Product Offer Verification
+
+ProductOffer supports Product -> many retailer offers in concept, but has a
+unique `{ product, retailer }` index, so only one offer per retailer/product
+pair exists.
+
+Stored fields include retailer reference, `price`, `currency`, `inStock`,
+`originalUrl`, `affiliateUrl`, `lastPriceCheck`, `url`, `linkType`, and
+`isActive`. Admin responses return the full offer. Customer offer responses
+use `sanitizeOffersForCustomer`, but active direct offers are allowed. The
+frontend admin panels follow the intended workflow of keeping offers inactive
+until an affiliate URL is pasted.
+
+Changing price or affiliate URL does not call any intelligence regeneration
+function. It also does not invalidate explanation cache rows, even though
+budget warnings and offer URLs can be part of recommendation output.
+
+## Product Intelligence Verification
+
+Actual chain:
+
+`POST /api/products/:id/generate-intelligence`
+-> `generateProductIntelligenceForProduct`
+-> populate final saved Product and related names
+-> `buildIntelligenceInputFromProduct`
+-> `generateProductIntelligence`
+-> Gemini structured JSON
+-> schema validation/normalization
+-> save embedded `productIntelligence`, quality score, metadata
+-> set `intelligenceStatus = generated`
+-> clear reviewer fields
+-> invalidate product explanations.
+
+Generation is explicit. `publishProduct` does not generate intelligence.
+Publishing requires an explanation, non-empty ingredient analysis, and
+`intelligenceStatus === approved`. Re-generation returns status to generated
+and clears approval metadata. Rejection sets rejected and notes, but does not
+clear old intelligence. Existing generated-but-unapproved products are
+blocked from publication; existing approved products are not automatically
+invalidated when editable product fields change.
+
+## AI Provider Routing
+
+- Firecrawl: page scrape/search in `firecrawlService.js`, conditional on
+  `FIRECRAWL_API_KEY`.
+- Groq extraction: `generateGroqJSON` with model key `extraction`.
+- Groq seller matching: `generateGroqJSON` with model key `matching`.
+- Gemini product intelligence: `generateGeminiJSON` using configured
+  intelligence model.
+- Groq personalized explanations: `generateGroqText` with model key
+  `explanation`.
+- Groq explanation validation: `generateGroqJSON` with model key `validation`.
+- Deterministic backend: `recommendationScoringService.js` and
+  `matchingEngineService.js`.
+- Gemini optional reranking: `rankCatalogCandidates` can reorder the already
+  filtered candidate set.
+
+Keys and models come from environment-backed `aiConfig.js`; defaults exist for
+models. Extraction also supports Gemini fallback, and page fetching supports
+legacy HTTP fallback, so provider architecture is conditional rather than
+strictly enforced.
+
+## Matching Engine Verification
+
+The intended path is:
+
+`SkinProfile + Product/ProductIntelligence`
+-> deterministic eligibility/conflict checks
+-> compatibility score
+-> warnings and positive reasons
+-> optional Gemini reranking
+-> Groq personalized explanation and validation.
+
+Allergy and avoided-ingredient matches are computed from product ingredients,
+key ingredients, intelligence ingredient analysis, aliases, and onboarding
+avoidance strings. The matching engine marks exact conflict labels as hard
+conflicts and sets overall score to zero when eligible is false. The legacy
+scorer itself only caps allergy scores and does not independently return an
+eligibility boolean.
+
+Positive reasons are generated from matched skin type, concerns, routine,
+hydration/oil-control signals, preferences, and ingredient analysis. Some
+reasons are based on AI-generated intelligence rather than directly verified
+research. Gemini reranking is limited to the supplied candidates and cannot
+introduce a new product, but it is still an AI ranking layer.
+
+## Budget Verification
+
+The new `computeProductMatch` path intentionally calls
+`scoreProductCompatibility` with `offerPrice: null`, then evaluates budget
+separately as `withinBudget` and a warning. Recommendation generation uses this
+path.
+
+However, `scoreProductCompatibility` itself contains price bonus/penalty logic
+and `anonymousAnalysisController` calls it directly with an offer price.
+Therefore budget is not universally separated from core scoring. The
+architecture is PARTIAL: regular recommendation generation separates it,
+anonymous analysis and direct scorer consumers do not.
+
+## Personalized Explanation Cache Verification
+
+The cache key is Product ID plus canonical profile hash plus:
+`productIntelligenceVersion`, `researchKnowledgeVersion`,
+`matchingEngineVersion`, and `explanationPromptVersion`. `userId` is not used.
+Profile arrays for concerns/current products/preferences/allergies/avoided
+ingredients are normalized, deduplicated, and sorted. User ID, timestamps,
+budget, categories, and questionnaire completion are excluded.
+
+On a valid cache hit, `getOrGenerateExplanation` returns before Groq or
+validation calls. On a miss it computes deterministic matching, calls Groq,
+validates the text (with deterministic hard-conflict rejection), and saves the
+result. Required version fields and model/modelVersion are stored, but model
+version is not part of the lookup identity. The cache concurrency lock exists
+but is not conclusive after the ten-second wait, as described in Critical
+Finding 7.
+
+## Versioning / Invalidation Verification
+
+Implemented constants:
+
+- `INTELLIGENCE_VERSION = 1.0.0`
+- `KNOWLEDGE_BASE_VERSION = 0.0.0`
+- `MATCHING_ENGINE_VERSION = 2.0.0`
+- `EXPLANATION_PROMPT_VERSION = 1.0.0`
+- extraction and seller prompt versions also exist.
+
+Intelligence regeneration invalidates all explanations for the product.
+Dedicated functions exist for matching-engine, prompt, and knowledge-base
+changes, but no startup job, migration, admin route, or normal deployment hook
+calls them. Product edits, offer price edits, affiliate URL edits, and model
+changes have no targeted invalidation path. `modelVersion` is stored after
+generation but omitted from the cache compound key.
+
+## Research / Evidence Verification
+
+`Evidence` supports Ingredient -> effect, benefit type, concerns, skin types,
+evidence strength, source, reference, publication/evidence dates,
+knowledgeBaseVersion, notes, and active state. It has an index on ingredient,
+effect, and source.
+
+The inspected code has no evidence controller/routes/service, no Product or
+ProductIntelligence relation, and no recommendation query that loads Evidence.
+Product intelligence labels such as `evidenceLevel` are generated/validated
+inside the AI output schema. The architecture therefore supports an isolated
+ingredient evidence record but not the requested active
+Ingredient -> Evidence -> Effect/Context -> Product Intelligence -> Matching
+pipeline.
+
+## Security Verification
+
+Firebase bearer tokens are verified in `authMiddleware.protect`; users are
+synced from Firebase and admin routes use `requireAdmin`. Public product
+reads filter inactive products for non-admin callers. Recommendation and chat
+resource ownership checks exist.
+
+Observed gaps:
+
+1. SSRF and redirect risks in URL fetching.
+2. No strict URL validation beyond HTTP(S).
+3. Original product/source URLs can leak in product and direct-offer paths.
+4. Admin offer update can make a direct URL active.
+5. AI raw response and extraction errors are stored, but admin error responses
+   can contain raw `err.message`; non-production responses include stack traces.
+6. `trackProductClick` is unauthenticated and unthrottled, allowing click
+   inflation; it does validate product/offer relationship and active state.
+7. `protect` does not reject a database user whose `isActive` is false.
+
+## Frontend Admin Workflow Verification
+
+Actual UI chain:
+
+`AdminAddProductPage`
+-> `createProductImport`
+-> `extractProductFromImport`
+-> `AdminImportDetailPage`
+-> `ProductDataForm`
+-> `updateExtractedProduct`
+-> `publishImportedProduct` (“Save to Catalog”)
+-> `SellerDiscoveryPanel`
+-> candidate accept/reject
+-> `OfferManagementPanel`
+-> paste affiliate URL
+-> `IntelligencePanel`
+-> generate/approve/reject
+-> `PublishPanel`
+-> `publishProduct`.
+
+Loading and disabled states exist for initial extraction, saving, catalog
+save, generation, approval, and final publish. Publish UI and backend gates
+both require generated and approved intelligence.
+
+The workflow is PARTIAL:
+
+- `ProductDataForm` does not expose variant, size, quantity, claims, currency,
+  stock, or identifiers.
+- `AdminProductDetailPage.handleSave` ignores editable brand, category,
+  ingredients, and key ingredients even though the form renders them.
+- Seller accept/reject buttons do not prevent duplicate submissions.
+- Offer management imports `createProductOffer` but does not provide a manual
+  offer creation UI.
+- The UI displays admin original URLs by design, while backend customer DTO
+  separation is incomplete.
+
+## Backward Compatibility
+
+The frontend retains both `/admin/product-imports` and legacy `/admin/imports`
+routes. Existing product, offer, recommendation, and intelligence API paths
+remain present.
+
+Behavior changes or compatibility risks:
+
+- Product publishing now requires generated and approved intelligence.
+  Existing inactive products without approved intelligence cannot be
+  published through the current endpoint.
+- Import publishing accepts `review` and changes it to `approved`, which may
+  differ from clients expecting approval to be a separate state.
+- Customer offer behavior depends on whether an offer is direct or affiliate;
+  direct active offers remain possible.
+- Product responses still expose broad Product documents, including
+  `sourceUrl`, while offer responses use a sanitizer.
+- Frontend callers may assume `url` is always customer-safe; anonymous
+  analysis still returns the raw offer URL.
+
+## Tests Executed
+
+1. Command: `cd p:\skinConsisus\backend; npm run test:profile`
+   Result: PASS. 6 passed, 0 failed.
+   Coverage: canonical profile array ordering, user ID exclusion, skin type
+   distinction, budget exclusion.
+
+2. Command: `cd p:\skinConsisus\backend; npm run test:matching`
+   Result: PASS. 6 passed, 0 failed.
+   Coverage: allergy hard conflict, high intelligence not overriding allergy,
+   budget warning and separate matching-engine score.
+
+3. Command: `cd p:\skinConsisus\backend; npm test`
+   Result: FAIL by configuration. Script prints “Error: no test specified” and
+   exits 1. No real backend test suite is configured.
+
+4. Command: `cd p:\skinConsisus\frontend; npm run lint`
+   Result: PASS with warnings. Oxlint reported unused imports/variables,
+   missing hook dependencies, set-state-in-effect warnings, and fast-refresh
+   export warnings. No lint error caused a non-zero exit.
+
+5. Command: `cd p:\skinConsisus\frontend; npm run build`
+   Result: PASS. Vite transformed 146 modules and produced the production
+   bundle successfully.
+
+Missing tests include API integration tests, Firecrawl/Groq/Gemini provider
+contract tests, malformed AI response tests, SSRF/redirect tests, import
+round-trip field tests, canonical identity collision tests, seller exact-match
+tests, affiliate exposure tests, publish-gate transition tests, cache
+concurrency tests, invalidation tests, response DTO/security tests, and
+browser end-to-end workflow tests.
+
+## End-to-End Trace
+
+Representative product flow:
+
+1. Admin opens `frontend/src/pages/AdminAddProductPage.jsx`.
+2. `handleImportSubmit` calls `frontend/src/api/adminApi.js:createProductImport`.
+3. Backend `productImportController.createProductImport` validates only the
+   HTTP(S) prefix and creates a pending ProductImport.
+4. Frontend calls `extractProductFromImport`.
+5. `productImportController.extractProductFromImportUrl` sets processing and
+   invokes `productExtractionService.extractProductFromUrl`.
+6. `fetchPageContent` calls Firecrawl scrape if configured. If not configured
+   or if it fails, `fetchUrlContentLegacy` follows redirects with native
+   fetch.
+7. `runStructuredExtraction` sends page content to Groq extraction. On Groq
+   failure it tries Gemini. Both parse JSON and validate required fields.
+8. `normalizeExtractedProductData` returns the broad extraction object, but
+   `getSanitizedExtractedData` and the ProductImport nested schema do not
+   preserve every broad field.
+9. `AdminImportDetailPage.loadAll` loads the import and renders
+   `ProductDataForm`. Only the subset represented by the form can be edited.
+10. “Save to Catalog” updates extracted data and calls
+    `publishImportedProduct`.
+11. `publishImportedProduct` upserts brand/category/ingredients, hashes
+    identity, upserts an inactive Product, and optionally creates an inactive
+    ProductOffer for the original retailer URL. It is not transactional.
+12. `SellerDiscoveryPanel` calls `runSellerDiscovery`.
+13. `sellerDiscoveryService.discoverSellers` loops active retailers, builds a
+    site-filtered query, calls Firecrawl search, optionally scrapes result
+    pages, and asks Groq to classify each candidate.
+14. Candidates are saved for admin review. AI match confidence/variant/size
+    values are stored but not independently enforced.
+15. Candidate acceptance can create an inactive offer. Offer management can
+    later set `affiliateUrl`, `url`, link type, and active status.
+16. `IntelligencePanel` calls `generateProductIntelligence`.
+17. `productController.generateProductIntelligenceForProduct` reads the
+    saved Product and populated ingredient data, calls Gemini, validates and
+    stores intelligence metadata, sets status generated, and invalidates
+    existing explanations.
+18. Admin approves via `approveProductIntelligence`.
+19. `PublishPanel` and `publishProduct` require intelligence content and
+    approved status, then activate the Product.
+20. A user SkinProfile is loaded by `recommendationService`; preferred
+    categories filter the active catalog and active offers are loaded.
+21. `matchingEngineService.computeProductMatch` calls the deterministic scorer
+    without price, evaluates hard conflicts, then evaluates budget separately.
+22. Eligible products call `explanationCacheService.getOrGenerateExplanation`.
+23. Canonical profile hash is computed without budget. A valid hit makes zero
+    AI calls; otherwise Groq generates text and Groq validates it, with a
+    deterministic hard-conflict override.
+24. Recommendations are optionally reranked by Gemini over the already
+    filtered candidate set and persisted as a snapshot.
+25. A second request with the same Product/profile/version key should hit the
+    cache, but profiles differing only in budget also hit the same key, and a
+    slow concurrent first request can still duplicate generation.
+
+Break points are: unsafe/unavailable page fetch, malformed/insufficient AI
+response, dropped extracted fields, partial catalog writes, weak seller
+matching, offer activation without affiliate URL, stale intelligence after
+edits, missing evidence data, budget/cache mismatch, cache lock timeout, and
+provider/API failure. The normal UI surfaces many errors, but there is no
+automated test proving the complete flow.
+
+## Files Inspected
+
+Backend:
+
+- `backend/package.json`
+- `backend/server.js`
+- `backend/src/config/aiConfig.js`
+- `backend/src/middleware/authMiddleware.js`
+- `backend/src/middleware/adminMiddleware.js`
+- `backend/src/services/userSyncService.js`
+- `backend/src/services/firecrawlService.js`
+- `backend/src/services/groqService.js`
+- `backend/src/services/geminiService.js`
+- `backend/src/services/productExtractionService.js`
+- `backend/src/services/productIdentityService.js`
+- `backend/src/services/sellerDiscoveryService.js`
+- `backend/src/services/productIntelligenceService.js`
+- `backend/src/services/productQualityScoringService.js`
+- `backend/src/services/recommendationScoringService.js`
+- `backend/src/services/matchingEngineService.js`
+- `backend/src/services/recommendationService.js`
+- `backend/src/services/profileCanonicalizationService.js`
+- `backend/src/services/explanationCacheService.js`
+- `backend/src/services/explanationValidationService.js`
+- `backend/src/services/invalidationService.js`
+- `backend/src/services/embeddingService.js`
+- `backend/src/services/vectorSearchService.js`
+- `backend/src/services/earnKaroService.js`
+- `backend/src/controllers/productImportController.js`
+- `backend/src/controllers/productController.js`
+- `backend/src/controllers/sellerDiscoveryController.js`
+- `backend/src/controllers/productOfferController.js`
+- `backend/src/controllers/recommendationController.js`
+- `backend/src/controllers/anonymousAnalysisController.js`
+- `backend/src/controllers/skinProfileController.js`
+- `backend/src/controllers/productClickController.js`
+- `backend/src/controllers/chatController.js`
+- `backend/src/controllers/adminIntelligenceController.js`
+- `backend/src/models/Product.js`
+- `backend/src/models/ProductImport.js`
+- `backend/src/models/ProductOffer.js`
+- `backend/src/models/Retailer.js`
+- `backend/src/models/SellerDiscoveryCandidate.js`
+- `backend/src/models/SkinProfile.js`
+- `backend/src/models/ProductExplanationCache.js`
+- `backend/src/models/Recommendation.js`
+- `backend/src/models/Evidence.js`
+- `backend/src/models/Ingredient.js`
+- `backend/src/models/User.js`
+- `backend/src/routes/productImportRoutes.js`
+- `backend/src/routes/productRoutes.js`
+- `backend/src/routes/sellerDiscoveryRoutes.js`
+- `backend/src/routes/productOfferRoutes.js`
+- `backend/src/routes/recommendationRoutes.js`
+- `backend/src/routes/skinProfileRoutes.js`
+- `backend/src/routes/productClickRoutes.js`
+- `backend/src/routes/chatRoutes.js`
+- `backend/src/routes/adminRoutes.js`
+- `backend/src/schemas/productExtractionSchema.js`
+- `backend/src/constants/intelligenceVersions.js`
+- `backend/scripts/test-profile-canonicalization.js`
+- `backend/scripts/test-matching-engine.js`
+
+Frontend:
+
+- `frontend/package.json`
+- `frontend/src/api/adminApi.js`
+- `frontend/src/api/productApi.js`
+- `frontend/src/api/recommendationApi.js`
+- `frontend/src/api/axios.js`
+- `frontend/src/components/admin/ProductDataForm.jsx`
+- `frontend/src/components/admin/SellerDiscoveryPanel.jsx`
+- `frontend/src/components/admin/OfferManagementPanel.jsx`
+- `frontend/src/components/admin/IntelligencePanel.jsx`
+- `frontend/src/components/admin/AdminLayout.jsx`
+- `frontend/src/pages/AdminAddProductPage.jsx`
+- `frontend/src/pages/AdminImportDetailPage.jsx`
+- `frontend/src/pages/AdminProductDetailPage.jsx`
+- `frontend/src/pages/AdminProductsPage.jsx`
+- `frontend/src/routes/AppRoutes.jsx`
+- `frontend/src/routes/ProtectedRoute.jsx`
+- `frontend/src/routes/AdminRoute.jsx`
+- `frontend/src/utils/productFormConstants.js`
+- `frontend/src/context/AuthContext.jsx`
+
+## Missing / Partial Features
+
+### Bugs and correctness gaps
+
+- SSRF-safe URL fetching and redirect controls: MISSING.
+- Complete extraction-field persistence/editing: PARTIAL.
+- Deterministic exact seller variant/size/quantity/identifier matching: PARTIAL.
+- Guaranteed affiliate-only customer offers: PARTIAL.
+- Consistent customer/admin URL response separation: PARTIAL.
+- Product-edit intelligence invalidation: MISSING.
+- Offer-change targeted explanation invalidation: MISSING.
+- Budget-independent core score on every path: PARTIAL.
+- Budget-aware explanation cache identity: MISSING.
+- Strict single-generator cache concurrency: PARTIAL.
+- Preference eligibility independent of sensitivity: PARTIAL.
+- Transactional catalog publishing: MISSING.
+- Inactive-user rejection in authentication middleware: MISSING.
+- Click tracking authentication/rate limiting: MISSING.
+
+### Architectural features not present or only represented by schemas
+
+- Evidence-backed intelligence connected to a research knowledge base:
+  PARTIAL model only; active pipeline MISSING.
+- Embedding/vector search: PLACEHOLDER.
+- Automated affiliate link generation: PLACEHOLDER in
+  `backend/src/services/earnKaroService.js`.
+- Research knowledge-base version deployment/invalidation process: MISSING.
+- Production API/integration/end-to-end test suite: MISSING.
+- Dedicated frontend Product Imports page workflow tests: MISSING.
+
+## Recommended Fix Order
+
+1. Critical/high security: SSRF protection, strict URL/redirect validation,
+   customer/admin response DTO separation, and server-enforced affiliate gating.
+2. High data correctness: persist and edit all extraction identity fields;
+   enforce deterministic seller identity matching; make product catalog writes
+   transactional or compensating.
+3. High consistency: invalidate/reset intelligence after relevant product
+   edits; add targeted offer/cache invalidation; include budget/model-relevant
+   inputs in explanation identity; repair cache lock ownership.
+4. High matching correctness: move must-have preference eligibility outside the
+   sensitivity branch and remove budget from all core compatibility score paths.
+5. Medium workflow: separate import draft saving from import approval, prevent
+   duplicate seller actions, and make product-detail saves honor all displayed
+   editable fields.
+6. Medium architecture: connect Evidence to ingredient/product intelligence
+   generation and add explicit knowledge-base version management.
+7. Low/operational: add comprehensive API, provider-contract, security,
+   concurrency, and browser end-to-end tests; address existing lint warnings.

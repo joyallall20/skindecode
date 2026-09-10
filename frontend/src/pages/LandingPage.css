@@ -1,0 +1,293 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap');
+
+.landing {
+  --color-bg: #ffffff;
+  --color-bg-soft: #fff2f7;
+  --color-ink: #15100f;
+  --color-ink-soft: #7a7178;
+  --color-pink: #ff3d77;
+  --color-pink-deep: #d71760;
+  --color-line: #f3e3ea;
+
+  min-height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow-x: hidden;
+}
+
+.landing *,
+.landing *::before,
+.landing *::after {
+  box-sizing: border-box;
+}
+
+/* ---------- Header ---------- */
+
+.landing__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 32px clamp(24px, 6vw, 72px);
+}
+
+.landing__logo {
+  font-family: 'Instrument Serif', serif;
+  font-size: 24px;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+}
+
+.landing__logo-dot {
+  color: var(--color-pink);
+}
+
+.landing__nav {
+  display: flex;
+  gap: clamp(20px, 3vw, 36px);
+}
+
+.landing__nav a {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-ink-soft);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.landing__nav a:hover,
+.landing__nav a:focus-visible {
+  color: var(--color-ink);
+}
+
+.landing__nav a:focus-visible {
+  outline: 2px solid var(--color-pink);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+.landing__nav a.landing__nav-login {
+  color: var(--color-ink);
+  font-weight: 600;
+  padding: 7px 18px;
+  border: 1px solid var(--color-ink);
+  border-radius: 999px;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.landing__nav a.landing__nav-login:hover,
+.landing__nav a.landing__nav-login:focus-visible {
+  background: var(--color-ink);
+  color: #ffffff;
+}
+
+/* ---------- Hero ---------- */
+
+.landing__hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: clamp(64px, 12vh, 128px) 24px clamp(56px, 10vh, 96px);
+  animation: hero-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.landing__hero-glow {
+  position: absolute;
+  top: 8%;
+  left: 50%;
+  width: 560px;
+  height: 360px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--color-bg-soft), transparent 72%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.landing__headline {
+  position: relative;
+  margin: 0;
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  font-style: italic;
+  font-size: clamp(40px, 6vw, 72px);
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  max-width: 16ch;
+}
+
+.landing__subhead {
+  position: relative;
+  margin: 20px 0 0;
+  font-size: clamp(16px, 1.6vw, 19px);
+  color: var(--color-ink-soft);
+  max-width: 34ch;
+}
+
+.landing__cta {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 40px;
+  padding: 16px 30px;
+  background: var(--color-pink);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: 999px;
+  box-shadow: 0 10px 24px -8px rgba(255, 61, 119, 0.55);
+  transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.landing__cta:hover {
+  background: var(--color-pink-deep);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px -8px rgba(215, 23, 96, 0.55);
+}
+
+.landing__cta:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 3px;
+}
+
+.landing__cta-arrow {
+  transition: transform 0.2s ease;
+}
+
+.landing__cta:hover .landing__cta-arrow {
+  transform: translateX(3px);
+}
+
+.landing__cta-note {
+  position: relative;
+  margin: 16px 0 0;
+  font-size: 13px;
+  color: var(--color-ink-soft);
+}
+
+/* ---------- Marketplace / marquee section ---------- */
+
+.landing__marketplace {
+  padding: 8px 0 clamp(72px, 10vh, 112px);
+  text-align: center;
+}
+
+.landing__marketplace-title {
+  margin: 40px 0 0;
+  font-size: clamp(18px, 2vw, 22px);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.landing__marketplace-subtitle {
+  margin: 8px auto 0;
+  max-width: 40ch;
+  font-size: 14px;
+  color: var(--color-ink-soft);
+  padding: 0 24px;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 768px) {
+  .landing__header {
+    padding: 24px;
+  }
+
+  .landing__hero {
+    padding: 56px 20px 48px;
+  }
+}
+
+@media (max-width: 420px) {
+  .landing__nav {
+    gap: 16px;
+  }
+
+  .landing__logo {
+    font-size: 21px;
+  }
+
+  .landing__cta {
+    width: 100%;
+    justify-content: center;
+    padding: 15px 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing__hero {
+    animation: none;
+  }
+}
+
+/* ---------- Desktop: compact spacing so everything fits one viewport ---------- */
+
+@media (min-width: 1024px) {
+  .landing {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  .landing__header {
+    padding: 20px clamp(32px, 5vw, 64px);
+  }
+
+  /* Hero + marketplace share the leftover space below the header and
+     center within it, rather than each claiming a fixed vh slice. */
+  .landing__hero {
+    margin-top: auto;
+    padding: 36px 24px 28px;
+  }
+
+  .landing__marketplace {
+    margin-bottom: auto;
+    padding: 4px 0 32px;
+  }
+
+  .landing__headline {
+    font-size: 50px;
+    line-height: 1.14;
+  }
+
+  .landing__subhead {
+    margin-top: 12px;
+    font-size: 16px;
+  }
+
+  .landing__cta {
+    margin-top: 26px;
+    padding: 13px 28px;
+    font-size: 14px;
+  }
+
+  .landing__cta-note {
+    margin-top: 12px;
+    font-size: 12.5px;
+  }
+
+  .landing__marketplace-title {
+    margin-top: 22px;
+    font-size: 17px;
+  }
+
+  .landing__marketplace-subtitle {
+    margin-top: 6px;
+    font-size: 13px;
+  }
+}

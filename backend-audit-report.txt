@@ -1,0 +1,1092 @@
+BACKEND AUDIT
+=============
+
+Scope
+-----
+Read-only audit of p:\skinConsisus\backend. No application files were modified.
+
+
+1. EXECUTIVE SUMMARY
+--------------------
+
+The backend is an Express/Mongoose monolith using Firebase Admin for
+authentication and Gemini for AI.
+
+The current product flow is:
+
+  Admin creates ProductImport
+    -> URL is fetched
+    -> Gemini extracts product data
+    -> Extracted data is stored for review
+    -> Admin edits/approves/rejects
+    -> Publishing upserts Brand, Category, Ingredients, Product and an
+       optional ProductOffer
+    -> Product intelligence is generated separately
+    -> Product can then be activated/published
+
+Product intelligence is stored embedded inside Product. It is generated once
+per product and does not receive SkinProfile data.
+
+Recommendations use deterministic compatibility scoring and optionally use
+Gemini to rerank already-selected candidates.
+
+The most important findings are:
+
+  - Product extraction fetches arbitrary HTTP(S) URLs and is vulnerable to
+    SSRF without network restrictions.
+  - Product edits do not invalidate or regenerate existing intelligence.
+  - There is no real research/evidence database.
+  - Inactive users are not rejected by authentication middleware.
+  - Must-have preference scoring is incorrectly nested inside the
+    high-sensitivity branch.
+  - Publishing is multi-document and non-transactional.
+  - Product intelligence is not generated during publishing.
+
+
+2. CURRENT ARCHITECTURE
+-----------------------
+
+Runtime:
+
+  backend/server.js
+    - Creates the Express application.
+    - Connects to MongoDB.
+    - Mounts all API routes.
+    - Adds CORS, JSON parsing, health check and error handling.
+
+Main directories:
+
+  backend/src/routes/
+    HTTP routes and middleware composition.
+
+  backend/src/controllers/
+    Request handling, validation and direct Mongoose operations.
+
+  backend/src/services/
+    Product extraction, Gemini access, intelligence, scoring and
+    recommendations.
+
+  backend/src/models/
+    Mongoose schemas and database relationships.
+
+  backend/src/schemas/
+    Gemini response schemas and normalization.
+
+  backend/src/middleware/
+    Firebase token verification and admin authorization.
+
+  backend/src/data/
+    Skin profile/product test fixtures.
+
+There is no repository layer. Controllers directly read and write Mongoose
+models.
+
+There is no implemented background-job or cron flow.
+
+There is no backend test suite. package.json defines npm test as an
+intentional failure command.
+
+Global concerns:
+
+  - CORS defaults to "*" when CLIENT_URL is missing.
+  - No rate limiting.
+  - No security headers.
+  - No request correlation IDs.
+  - No transaction handling.
+  - Error stacks are exposed outside production.
+
+
+3. CURRENT PRODUCT FLOW
+-----------------------
+
+Important files:
+
+  backend/src/controllers/productImportController.js
+  backend/src/services/productExtractionService.js
+  backend/src/controllers/productController.js
+  backend/src/models/Product.js
+  backend/src/models/ProductImport.js
+
+Import flow:
+
+  POST /api/product-imports
+    -> require Firebase authentication
+    -> require admin role
+    -> validate sourceUrl
+    -> create ProductImport(status: pending)
+
+  POST /api/product-imports/:id/extract
+    -> load ProductImport
+    -> set status to processing
+    -> fetch sourceUrl
+    -> strip HTML and truncate content
+    -> call Gemini extraction
+    -> normalize extracted fields
+    -> store extractedData, provider, model and raw response
+    -> set status to review or failed
+
+  PATCH /api/product-imports/:id/extracted-data
+    -> admin can modify extractedData, status and errorMessage
+    -> no workflow transition validation
+
+  POST /api/product-imports/:id/approve
+    -> status becomes approved
+    -> reviewedBy and reviewedAt are stored
+
+  POST /api/product-imports/:id/reject
+    -> status becomes rejected
+    -> reviewedBy, reviewedAt and errorMessage are stored
+
+  POST /api/product-imports/:id/publish
+    -> accepts status approved OR review
+    -> validates name, brand and category
+    -> upserts Brand
+    -> upserts Category
+    -> upserts Ingredients
+    -> upserts Product with isActive false
+    -> optionally upserts Retailer and ProductOffer
+    -> sets ProductImport.publishedProduct
+
+Publishing does not generate product intelligence and does not activate the
+new Product.
+
+Manual product creation:
+
+  POST /api/products
+    -> admin-only
+    -> creates Product from supplied existing Brand, Category and Ingredient IDs
+    -> does not generate intelligence or quality score
+    -> does not automatically create related catalog entities
+
+Manual editing:
+
+  PUT /api/products/:id
+    -> admin-only
+    -> updates allowlisted product fields
+    -> does not clear or regenerate product intelligence
+    -> does not recalculate qualityScore
+
+Product deletion:
+
+  DELETE /api/products/:id
+    -> permanently deletes Product
+    -> does not cascade-delete offers, recommendations, clicks, imports or
+       chat references
+
+Product status:
+
+  PATCH /api/products/:id/toggle-status
+    -> toggles Product.isActive
+
+
+4. PRODUCT EXTRACTION AUDIT
+---------------------------
+
+File:
+
+  backend/src/services/productExtractionService.js
+
+Input:
+
+  - Product URL
+  - Fetched page content
+  - Content truncation metadata
+
+Fetching:
+
+  - HTTP(S) URLs accepted.
+  - Redirects followed.
+  - 20 second timeout.
+  - Response body limited to 500,000 bytes.
+  - Page text limited to 30,000 characters.
+  - HTML tags, scripts, styles and comments stripped.
+
+Gemini extraction fields:
+
+  - name
+  - brand
+  - category
+  - description
+  - images
+  - ingredients
+  - keyIngredients
+  - skinTypes
+  - concerns
+  - fragranceFree
+  - alcoholFree
+  - price
+  - retailer
+
+The import sanitizer additionally supports essentialOilFree and
+pregnancyFriendly, but those fields are not declared in the extraction
+Gemini schema.
+
+Validation requires:
+
+  - name
+  - brand
+  - category
+  - at least one ingredient
+
+The full raw AI response is stored in ProductImport.aiRawResponse.
+
+Extraction prompt safeguards:
+
+  - Use only information explicitly present on the page.
+  - Do not invent ingredients, concentrations or clinical claims.
+  - Do not make medical claims or guarantees.
+
+Critical issue:
+
+  Arbitrary URLs can be fetched, including internal/private destinations and
+  redirected destinations. No SSRF protection was found.
+
+
+5. PRODUCT INTELLIGENCE FLOW
+----------------------------
+
+Endpoint:
+
+  POST /api/products/:id/generate-intelligence
+
+Files:
+
+  backend/src/controllers/productController.js
+  backend/src/services/productIntelligenceService.js
+  backend/src/utils/productIntelligenceInput.js
+  backend/src/schemas/productIntelligenceSchema.js
+  backend/src/services/productQualityScoringService.js
+
+Execution:
+
+  - Admin authentication.
+  - Load Product with Brand, Category, Ingredients and keyIngredients.
+  - Build product-only intelligence input.
+  - Call Gemini with structured JSON schema.
+  - Parse, validate and normalize output.
+  - Compute deterministic quality score.
+  - Store productIntelligence.
+  - Store qualityScore.
+  - Store intelligenceMetadata.
+
+The AI receives:
+
+  - name
+  - brand
+  - category
+  - description
+  - ingredients
+  - keyIngredients
+  - skinTypes
+  - concerns
+  - fragranceFree
+  - alcoholFree
+  - essentialOilFree
+  - mustHaveAttributes already present in intelligence
+
+The AI does not receive:
+
+  - SkinProfile
+  - user ID
+  - allergies
+  - avoided ingredients
+  - budget
+  - age
+  - current products
+  - user preferences
+
+Explicit service metadata reports:
+
+  skinProfileUsedInGeneration: false
+
+Output:
+
+  - skinTypeCompatibility
+  - sensitivitySuitability
+  - concernCompatibility
+  - ingredientAnalysis
+  - ingredientConflicts
+  - avoidanceSignals
+  - mustHaveAttributes
+  - hydrationProfile
+  - oilControlProfile
+  - qualityAssessment
+  - evidenceConfidence
+  - explanation
+
+Storage:
+
+  Product.productIntelligence
+  Product.qualityScore
+  Product.intelligenceMetadata
+
+There is no separate ProductIntelligence collection.
+
+Quality scoring uses:
+
+  - evidenceConfidence
+  - ingredient analysis depth
+  - disclosed product information
+  - formulation signals
+  - must-have attributes
+  - ingredient conflict penalties
+
+
+6. CURRENT SKIN PROFILE FLOW
+----------------------------
+
+Files:
+
+  backend/src/models/SkinProfile.js
+  backend/src/controllers/skinProfileController.js
+  backend/src/routes/skinProfileRoutes.js
+
+SkinProfile has a unique userId reference to User.
+
+Supported operations:
+
+  - Create profile.
+  - Read current profile.
+  - Update profile.
+  - Delete profile.
+  - Mark questionnaire complete.
+  - Save anonymous analysis to an authenticated user.
+
+Field usage:
+
+  skinType
+    Stored and used in matching/scoring.
+
+  sensitivity
+    Stored and used in matching/scoring.
+
+  morningSkinFeel
+    Stored and used for hydration/oil-control scoring.
+
+  afterMoisturizerFeel
+    Exists in the model but is not accepted by the controller allowlist.
+    Not used in scoring or matching.
+
+  responseToNewProducts
+    Used for reactive-skin scoring.
+
+  sunscreenHabit
+    Used for sunscreen-category scoring.
+
+  ageRange
+    Stored and validated, but does not materially affect scoring.
+
+  currentProducts
+    Used for routine overlap/complement scoring.
+
+  primaryGoal
+    Used for goal-to-concern matching, but only inside the high-sensitivity
+    branch.
+
+  concerns
+    Major compatibility and ranking factor.
+
+  allergies
+    Used for ingredient matching and hard score cap.
+
+  avoidedIngredients
+    Resolved to Ingredient IDs and used for ingredient matching.
+
+  mustHavePreferences
+    Partially used. Logic is incorrectly nested under high sensitivity.
+
+  budget
+    Used for offer filtering and price scoring.
+
+  preferredProductCategories
+    Used to filter the product query.
+
+  questionnaireCompleted
+    Stored but not used to block recommendation generation.
+
+  onboardingAnswers
+    Stored as unrestricted Mixed data and used for additional avoided
+    ingredient parsing.
+
+
+7. PRODUCT MATCHING AND RECOMMENDATION
+--------------------------------------
+
+Authenticated flow:
+
+  POST /api/recommendations/generate
+    -> load SkinProfile
+    -> load all active Products
+    -> populate Brand, Category, Ingredients and keyIngredients
+    -> load active ProductOffers
+    -> select lowest offer per product
+    -> score each product deterministically
+    -> remove hard conflicts
+    -> apply budget filtering
+    -> sort candidates by score
+    -> optionally call Gemini to rerank candidates
+    -> store Recommendation
+
+Primary implementation:
+
+  backend/src/services/recommendationService.js
+  backend/src/services/recommendationScoringService.js
+  backend/src/controllers/recommendationController.js
+
+Deterministic score:
+
+  Starts at 50.
+
+Factors include:
+
+  - Skin-type compatibility
+  - Brand-listed skin types
+  - Concern compatibility
+  - Brand-listed concerns
+  - Ingredient analysis
+  - Sensitivity suitability
+  - Hydration profile
+  - Oil-control profile
+  - Product quality score
+  - Offer price and budget
+  - Product category
+  - Current routine
+  - Sunscreen habit
+  - Fragrance-free status
+  - Alcohol-free status
+  - Potential sensitivity ingredients
+  - Ingredient conflicts
+  - Allergies
+  - Avoided ingredients
+  - Must-have preferences
+
+Hard conflict behavior:
+
+  - Allergy match caps score at 12.
+  - Avoided ingredient match caps score at 30.
+  - Conflict/unknown required preferences are filtered out by the
+    recommendation service.
+
+Matching and recommendation are partially separated:
+
+  - scoreProductCompatibility is shared by recommendation and anonymous
+    analysis.
+  - Product intelligence is generated separately and consumed by scoring.
+  - Gemini only reranks deterministic candidates.
+
+Known issues:
+
+  - Must-have preferences are ignored for low/medium sensitivity users.
+  - Goal scoring is also nested under the high-sensitivity block.
+  - Entire active catalog is loaded into memory for each request.
+  - Budget handling can behave incorrectly for malformed values.
+  - Category filtering can compare caller-supplied values against ObjectIds.
+  - Anonymous analysis returns rankedRecommendations instead of the computed
+    five-item recommendations array.
+
+
+8. INGREDIENT SYSTEM
+--------------------
+
+File:
+
+  backend/src/models/Ingredient.js
+
+Fields:
+
+  - name
+  - aliases
+  - description
+  - benefits
+  - suitableFor
+  - concerns
+  - potentialIrritant
+  - irritationLevel
+  - comedogenicRating
+  - categories
+  - embedding
+  - isActive
+
+Public endpoints:
+
+  GET /api/ingredients
+  GET /api/ingredients/search
+  GET /api/ingredients/:id
+
+Admin endpoints:
+
+  POST /api/ingredients
+  PUT /api/ingredients/:id
+  DELETE /api/ingredients/:id
+  PATCH /api/ingredients/:id/toggle-status
+
+Admins can manually create, edit, deactivate and delete ingredients.
+
+Product import publishing creates minimal ingredient documents using only:
+
+  name
+  aliases: [name]
+  isActive: true
+
+There is no canonical name normalization beyond exact matching.
+
+There is no Ingredient-to-research relationship.
+
+Ingredient deletion does not clean Product or SkinProfile references.
+
+Ingredient update accepts arbitrary request body fields instead of a strict
+allowlist.
+
+
+9. RESEARCH AND EVIDENCE SYSTEM
+-------------------------------
+
+No structured research-backed evidence system was found.
+
+Existing evidence-related fields are only:
+
+  - evidenceLevel
+  - evidenceConfidence
+  - KNOWLEDGE_BASE_VERSION = 0.0.0
+
+There are no:
+
+  - Research documents
+  - Study IDs
+  - Citations
+  - Source URLs
+  - Clinical references
+  - Verification workflows
+  - Ingredient-to-study relationships
+  - Evidence review records
+
+The label evidence-backed is generated and normalized from Gemini output. It
+is not independently verified by the backend.
+
+
+10. OFFERS, RETAILERS AND AFFILIATE SYSTEM
+-------------------------------------------
+
+Models:
+
+  backend/src/models/ProductOffer.js
+  backend/src/models/Retailer.js
+
+Relationship:
+
+  Product 1 -> many ProductOffer -> Retailer
+
+ProductOffer fields:
+
+  - product
+  - retailer
+  - url
+  - originalUrl
+  - affiliateUrl
+  - linkType
+  - price
+  - currency
+  - inStock
+  - lastPriceCheck
+  - isActive
+
+There is a unique compound index on product and retailer.
+
+Admin operations:
+
+  - Create offer.
+  - Update offer.
+  - Delete offer.
+
+Import publishing optionally creates a retailer and a direct ProductOffer.
+
+Affiliate behavior:
+
+  backend/src/services/earnKaroService.js is a placeholder.
+  No live EarnKaro API call is implemented.
+  Direct URLs are preserved as fallback.
+
+Offer prices influence recommendation filtering and scoring.
+
+Known issues:
+
+  - Offer update does not verify replacement Product/Retailer references.
+  - URLs have no scheme/domain validation.
+  - Public offer reads do not filter inactive retailers.
+  - Click tracking is unauthenticated and unthrottled.
+  - Recommendation references supplied to click tracking are not verified
+    to belong to the user.
+
+
+11. DATABASE RELATIONSHIPS
+--------------------------
+
+  User
+    -> skinProfile: SkinProfile
+    -> preferredBrands: Brand[]
+    -> preferredRetailers: Retailer[]
+    -> Recommendation.user
+    -> ChatConversation.user
+    -> ProductClick.user
+    -> ProductImport.submittedBy/reviewedBy
+
+  SkinProfile
+    -> userId: User
+    -> avoidedIngredients: Ingredient[]
+    -> preferredProductCategories: Category[]
+
+  Product
+    -> brand: Brand
+    -> category: Category
+    -> ingredients: Ingredient[]
+    -> keyIngredients: Ingredient[]
+    -> embedded productIntelligence
+    -> ProductOffer.product
+
+  ProductImport
+    -> submittedBy: User
+    -> reviewedBy: User
+    -> publishedProduct: Product
+
+  ProductOffer
+    -> product: Product
+    -> retailer: Retailer
+
+  Recommendation
+    -> user: User
+    -> embedded product items reference Product
+
+  ProductClick
+    -> user: User
+    -> product: Product
+    -> productOffer: ProductOffer
+    -> recommendation: Recommendation
+
+  ChatConversation
+    -> user: User
+    -> product: Product
+    -> recommendation: Recommendation
+
+No cascading deletes are implemented.
+
+No transaction spans import publishing.
+
+Product.embedding and Ingredient.embedding exist but are not populated by an
+active embedding flow.
+
+
+12. API MAP
+-----------
+
+Authentication:
+
+  GET  /api/auth/me
+  POST /api/auth/firebase
+
+Products:
+
+  GET    /api/products
+  GET    /api/products/search
+  GET    /api/products/category/:categoryId
+  GET    /api/products/brand/:brandId
+  GET    /api/products/:id
+  POST   /api/products                         Admin
+  PUT    /api/products/:id                     Admin
+  DELETE /api/products/:id                     Admin
+  GET    /api/products/:id/intelligence-input  Admin
+  POST   /api/products/:id/generate-intelligence Admin
+  PATCH  /api/products/:id/publish             Admin
+  PATCH  /api/products/:id/toggle-status       Admin
+
+Imports:
+
+  POST  /api/product-imports
+  GET   /api/product-imports
+  GET   /api/product-imports/:id
+  POST  /api/product-imports/:id/extract
+  PATCH /api/product-imports/:id/extracted-data
+  POST  /api/product-imports/:id/approve
+  POST  /api/product-imports/:id/reject
+  POST  /api/product-imports/:id/publish
+  GET   /api/product-imports/:id/intelligence-input
+
+Recommendations:
+
+  POST /api/recommendations/generate
+  GET  /api/recommendations/latest
+  GET  /api/recommendations/:id
+  GET  /api/recommendations/:id/products
+
+Skin profiles:
+
+  GET    /api/skin-profile
+  POST   /api/skin-profile
+  PUT    /api/skin-profile
+  DELETE /api/skin-profile
+  POST   /api/skin-profile/complete-questionnaire
+  POST   /api/skin-profile/save-anonymous
+
+Ingredients:
+
+  GET    /api/ingredients
+  GET    /api/ingredients/search
+  GET    /api/ingredients/:id
+  POST   /api/ingredients                     Admin
+  PUT    /api/ingredients/:id                 Admin
+  DELETE /api/ingredients/:id                 Admin
+  PATCH  /api/ingredients/:id/toggle-status   Admin
+
+Offers:
+
+  GET    /api/products/:productId/offers
+  POST   /api/products/:productId/offers       Admin
+  PUT    /api/products/:productId/offers/:id   Admin
+  DELETE /api/products/:productId/offers/:id   Admin
+
+Other:
+
+  POST /api/anonymous-analysis
+  POST /api/product-clicks
+  /api/chat/*
+  /api/brands/*
+  /api/categories/*
+  /api/retailers/*
+  /api/admin/*
+
+
+13. AI SYSTEMS
+--------------
+
+Extraction:
+
+  productExtractionService.js
+    Input: URL page text.
+    Provider: Gemini.
+    Output: structured extracted product fields.
+    Storage: ProductImport.extractedData and aiRawResponse.
+
+Intelligence:
+
+  productIntelligenceService.js
+    Input: product-only fields.
+    Provider: Gemini.
+    Output: compatibility, ingredient analysis, conflicts, attributes,
+    quality assessment, confidence and explanation.
+    Storage: Product.productIntelligence and metadata.
+
+Recommendation reranking:
+
+  geminiService.js -> rankCatalogCandidates()
+    Input: SkinProfile and deterministic candidate list.
+    Output: candidate IDs and reasons.
+    The validator rejects product IDs outside the candidate set.
+
+Chat:
+
+  chatController.js -> generateGeminiReply()
+    Input: user message plus basic product/recommendation context.
+    Output: free-form assistant message.
+    No domain-specific medical safety system prompt was found.
+
+Matching:
+
+  Deterministic only in recommendationScoringService.js.
+  It is not embedding or vector based.
+
+
+14. PRODUCT INTELLIGENCE COMBINATION AUDIT
+-------------------------------------------
+
+Product intelligence is generated once per Product, not per SkinProfile.
+
+The system can represent Product x full SkinProfile at matching time, but
+does not generate a separate intelligence object for each profile.
+
+Theoretical finite profile combinations, treating multi-select fields as
+arbitrary subsets, are approximately:
+
+  5 x 4 x 6 x 5 x 4 x 6 x 2^8 x 8 x 2^14 x 2^5 x 2
+  = 1,887,436,800 combinations
+
+This excludes free-form allergies, ingredient database choices, category IDs,
+budget values and arbitrary onboardingAnswers.
+
+The test matrix provides:
+
+  - Single-dimension coverage.
+  - Pairwise combinations.
+  - Safety-critical profiles.
+  - Allergy and avoidance cases.
+  - Preference cases.
+  - Boundary cases.
+
+The matrix is fixture coverage, not proof of production data coverage.
+
+
+15. CURRENT FLOW DIAGRAM
+------------------------
+
+Admin:
+
+  ADMIN
+    -> Create ProductImport
+    -> Extract URL
+    -> Fetch page
+    -> Gemini extraction
+    -> Validate and normalize
+    -> Review
+    -> Edit/approve/reject
+    -> Publish import
+    -> Upsert Brand
+    -> Upsert Category
+    -> Upsert Ingredients
+    -> Upsert inactive Product
+    -> Optional Retailer/ProductOffer
+    -> Generate intelligence separately
+    -> Store quality score and metadata
+    -> Activate product separately
+
+User:
+
+  USER
+    -> SkinProfile
+    -> Generate recommendations
+    -> Load active products and offers
+    -> Deterministic compatibility scoring
+    -> Allergy/avoidance/preference filtering
+    -> Budget filtering
+    -> Optional Gemini reranking
+    -> Store Recommendation
+    -> Return product, score, factors and explanation
+
+Exact reason a product is chosen:
+
+  POST /api/recommendations/generate
+    -> recommendationController.generateRecommendations()
+    -> generateRecommendationsForUser()
+    -> SkinProfile.findOne()
+    -> Product.find(active products)
+    -> ProductOffer.find(active offers)
+    -> scoreProductCompatibility()
+    -> remove hard conflicts
+    -> apply budget filter
+    -> sort by deterministic score
+    -> optional Gemini rerank
+    -> Recommendation.create()
+
+The final explanation comes from deterministic matched factors and potential
+concerns, but can be replaced by Gemini's ranking reason.
+
+
+16. FEATURE MATRIX
+------------------
+
+  Product extraction       Exists: Yes  Used: Yes       Complete: Partial
+  Manual product creation  Exists: Yes  Used: Unverified Complete: Partial
+  Manual product editing   Exists: Yes  Used: Partial  Complete: No
+  Manual ingredient CRUD   Exists: Yes  Used: Yes      Complete: Partial
+  Ingredient knowledge     Exists: Schema only         Complete: No
+  Product intelligence     Exists: Yes  Used: Yes      Complete: Partial
+  Skin-profile intelligence Exists: No                  Complete: No
+  Product matching         Exists: Yes  Used: Yes      Complete: Partial
+  Recommendation           Exists: Yes  Used: Yes      Complete: Partial
+  Quality scoring          Exists: Yes  Used: Yes      Complete: Partial
+  Offers                   Exists: Yes  Used: Yes      Complete: Partial
+  Affiliate links          Placeholder only            Complete: No
+  Research data            Exists: No                   Complete: No
+  Evidence tracking        AI labels only               Complete: No
+  Publishing               Exists: Yes  Used: Yes      Complete: Partial
+  Import review            Exists: Yes  Used: Partial Complete: Partial
+  Admin testing            Exists: Yes  Used: Yes      Complete: Partial
+  Embeddings/vector search Placeholder only            Complete: No
+  Background jobs          Not implemented             Complete: No
+
+
+17. CRITICAL RED FLAGS
+----------------------
+
+CRITICAL
+
+  1. SSRF in product extraction.
+     Arbitrary HTTP(S) URLs, redirects and no private-network restriction.
+
+  2. Stale product intelligence.
+     Product edits do not invalidate or regenerate intelligence and quality
+     scores.
+
+  3. No genuine research/evidence subsystem.
+     AI evidence labels are not independently verified.
+
+HIGH
+
+  4. Inactive users remain authorized.
+     protect() does not check User.isActive.
+
+  5. Publishing is not transactional.
+     Partial writes can leave inconsistent catalog state.
+
+  6. Preferences are ignored for most users.
+     Must-have preference logic is nested under high sensitivity.
+
+  7. Entire catalog is loaded into memory for recommendation requests.
+
+  8. Raw AI responses are persisted in imports.
+
+  9. Product click tracking is public and unthrottled.
+
+MEDIUM
+
+  10. Ingredient deletion leaves dangling references.
+  11. Offer updates do not verify replacement references.
+  12. Offer URL validation is missing.
+  13. Inactive retailers are not excluded from public offer reads.
+  14. Import status transitions are not enforced.
+  15. Publishing accepts review status in addition to approved.
+  16. Anonymous analysis returns rankedRecommendations rather than the
+      computed five-item recommendations array.
+  17. Chat lacks skincare-specific safety guardrails.
+
+LOW
+
+  18. Embedding fields and vector search are placeholders.
+  19. Intelligence versioning is metadata-only, not historical.
+  20. Error stacks are exposed outside production.
+
+
+18. WHAT IT APPEARS TO DO VS WHAT IT ACTUALLY DOES
+---------------------------------------------------
+
+  Expected: publishing generates intelligence.
+  Actual: intelligence generation is a separate admin endpoint.
+
+  Expected: publishing activates imported products.
+  Actual: imported products are created inactive.
+
+  Expected: approval is required before publishing.
+  Actual: review status is also accepted.
+
+  Expected: intelligence is personalized.
+  Actual: intelligence is universal per Product.
+
+  Expected: evidence-backed means verified.
+  Actual: it is an AI-generated label.
+
+  Expected: all SkinProfile fields affect matching.
+  Actual: several are ignored or partially used.
+
+  Expected: preferences always affect ranking.
+  Actual: preference scoring only runs within high sensitivity logic.
+
+  Expected: edits keep intelligence current.
+  Actual: edits can leave stale intelligence and quality scores.
+
+  Expected: affiliate URLs are generated.
+  Actual: EarnKaro integration is a placeholder.
+
+  Expected: ingredients are normalized.
+  Actual: matching is mostly exact-name based.
+
+  Expected: deleting entities cleans references.
+  Actual: no cascading cleanup exists.
+
+  Expected: anonymous analysis returns five products.
+  Actual: it returns rankedRecommendations, potentially more than five.
+
+  Expected: product matching is AI-based.
+  Actual: the core scorer is deterministic and Gemini only optionally
+  reranks candidates.
+
+  Expected: publishing is atomic.
+  Actual: several independent writes occur without a transaction.
+
+
+19. RECOMMENDED ARCHITECTURE BEFORE MODIFICATION
+------------------------------------------------
+
+No changes were implemented during this audit.
+
+Recommended future separation:
+
+  - Import domain: fetch, extraction, review, approval and publishing.
+  - Catalog domain: Product, Brand, Category, Ingredient, Retailer and Offer.
+  - Intelligence domain: generation, versions, metadata and invalidation.
+  - Evidence domain: research sources, citations and verification.
+  - Matching domain: deterministic safety filters and compatibility scoring.
+  - Recommendation domain: candidate generation, ranking and explanations.
+  - Publishing workflow: explicit states and transactional writes.
+  - Audit/security layer: admin actions, SSRF protection, rate limits and
+    inactive-user enforcement.
+
+Product intelligence should be versioned or invalidated whenever relevant
+Product fields change.
+
+
+20. FILES LIKELY TO CHANGE LATER
+--------------------------------
+
+Separate intelligence generation:
+
+  backend/src/controllers/productController.js
+  backend/src/services/productIntelligenceService.js
+  backend/src/utils/productIntelligenceInput.js
+  backend/src/models/Product.js
+  backend/src/routes/productRoutes.js
+
+Manual product editing:
+
+  backend/src/controllers/productController.js
+  backend/src/models/Product.js
+  frontend admin product pages
+
+Manual ingredient management:
+
+  backend/src/controllers/ingredientController.js
+  backend/src/models/Ingredient.js
+  backend/src/routes/ingredientRoutes.js
+  backend/src/controllers/productImportController.js
+
+Research/evidence knowledge base:
+
+  backend/src/models/Ingredient.js
+  backend/src/schemas/productIntelligenceSchema.js
+  backend/src/services/productIntelligenceService.js
+  backend/src/constants/intelligenceVersions.js
+  New research/evidence models, routes, controllers and services
+
+Skin-profile intelligence:
+
+  backend/src/services/productIntelligenceService.js
+  backend/src/utils/productIntelligenceInput.js
+  backend/src/services/recommendationScoringService.js
+  backend/src/services/recommendationService.js
+  backend/src/models/SkinProfile.js
+
+Testing/permutation framework:
+
+  backend/src/data/skinProfileTestMatrix.js
+  backend/src/services/productIntelligenceTestHarness.js
+  backend/scripts/run-intelligence-audit.js
+  New automated test suite
+
+
+FINAL CONCLUSION
+----------------
+
+If a product and a user profile are supplied today, product selection is
+determined by the recommendation scoring path, not by per-user product
+intelligence generation:
+
+  SkinProfile
+    -> active Product catalog
+    -> active ProductOffer prices
+    -> scoreProductCompatibility()
+    -> allergy/avoidance/preference filtering
+    -> budget filtering
+    -> deterministic score sort
+    -> optional Gemini reranking
+    -> Recommendation response
+
+The system has a meaningful deterministic matching foundation, but product
+intelligence is universal and can become stale, evidence is not research
+backed, and several authorization, consistency and scalability risks should be
+addressed before expanding the intelligence architecture.
