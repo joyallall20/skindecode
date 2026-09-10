@@ -7,12 +7,10 @@ import {
   recordAnonymousConsent,
 } from '../services/anonymousConsentService.js';
 
-const SESSION_COOKIE =
-  'skindecode_anon_session';
+const SESSION_COOKIE = 'skindecode_anon_session';
 
 const getClientIp = (req) => {
-  const forwarded =
-    req.headers['x-forwarded-for'];
+  const forwarded = req.headers['x-forwarded-for'];
 
   if (forwarded) {
     return String(forwarded)
@@ -27,32 +25,30 @@ const getClientIp = (req) => {
   );
 };
 
-const getOrCreateSessionId = (
-  req,
-  res
-) => {
+const getOrCreateSessionId = (req, res) => {
   let sessionId =
     req.cookies?.[SESSION_COOKIE];
 
   if (!sessionId) {
-    sessionId =
-      crypto.randomUUID();
+    sessionId = crypto.randomUUID();
 
     res.cookie(
       SESSION_COOKIE,
       sessionId,
       {
         httpOnly: true,
-        secure:
-          process.env.NODE_ENV ===
-          'production',
-        sameSite: 'lax',
+
+        // Cross-site frontend (Vercel) -> backend (Render)
+        secure: true,
+        sameSite: 'none',
+
         maxAge:
           1000 *
           60 *
           60 *
           24 *
           30,
+
         path: '/',
       }
     );
