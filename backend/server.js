@@ -25,12 +25,17 @@ import researchRoutes from "./src/routes/researchRoutes.js";
 import anonymousAnalysisRoutes from "./src/routes/anonymousAnalysisRoutes.js";
 import authRoutes from "./src/routes/authRoutes.js";
 
-import { startProductIntelligenceWorker } from "./src/workers/productIntelligenceWorker.js";
+import {
+  startProductIntelligenceWorker,
+} from "./src/workers/productIntelligenceWorker.js";
+
 import {
   startAnonymousAnalysisWorker,
 } from "./src/workers/anonymousAnalysisWorker.js";
 
+
 const app = express();
+
 
 /* =========================================================
    DATABASE
@@ -41,14 +46,75 @@ connectDB().then(() => {
   startAnonymousAnalysisWorker();
 });
 
+
 /* =========================================================
    CORS
 ========================================================= */
 
+/*
+ * Production frontend:
+ *   https://skindecode.vercel.app
+ *
+ * Local development:
+ *   http://localhost:5173
+ *
+ * Vercel also creates preview deployments such as:
+ *   https://skindecode-xxxxx-joyallall20s-projects.vercel.app
+ */
+
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  "http://localhost:5173",
+].filter(Boolean);
+
+
+const isAllowedOrigin = (origin) => {
+  // Requests without an Origin header
+  // (health checks, server-to-server requests, etc.)
+  if (!origin) {
+    return true;
+  }
+
+  // Exact allowed origins
+  if (allowedOrigins.includes(origin)) {
+    return true;
+  }
+
+  // Vercel preview deployments
+  //
+  // Example:
+  // https://skindecode-1dy...-joyallall20s-projects.vercel.app
+  //
+  if (
+    /^https:\/\/skindecode-[a-z0-9-]+-joyallall20s-projects\.vercel\.app$/i.test(
+      origin
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(
+          `⚠️ CORS blocked origin: ${origin}`
+        );
+
+        callback(
+          new Error("Not allowed by CORS")
+        );
+      }
+    },
+
     credentials: true,
+
     methods: [
       "GET",
       "POST",
@@ -57,6 +123,7 @@ app.use(
       "DELETE",
       "OPTIONS",
     ],
+
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -64,11 +131,17 @@ app.use(
   })
 );
 
+
 /* =========================================================
    BODY PARSERS
 ========================================================= */
 
-app.use(express.json({ limit: "10mb" }));
+app.use(
+  express.json({
+    limit: "10mb",
+  })
+);
+
 app.use(
   express.urlencoded({
     extended: true,
@@ -76,11 +149,13 @@ app.use(
   })
 );
 
+
 /* =========================================================
    COOKIES
 ========================================================= */
 
 app.use(cookieParser());
+
 
 /* =========================================================
    DEVELOPMENT REQUEST LOGGER
@@ -96,9 +171,6 @@ if (process.env.NODE_ENV === "development") {
   });
 }
 
-/* =========================================================
-   HEALTH CHECK
-========================================================= */
 
 /* =========================================================
    HEALTH CHECK
@@ -112,95 +184,177 @@ app.get("/", (req, res) => {
   });
 });
 
+
 app.get("/health", (req, res) => {
   res.status(200).json({
     success: true,
     status: "OK",
-    message: "Skincare Platform Backend API is running smoothly",
+    message:
+      "Skincare Platform Backend API is running smoothly",
     timestamp: new Date(),
   });
 });
+
 
 /* =========================================================
    ROUTES
 ========================================================= */
 
-/* Anonymous recommendation flow */
+
+/* ---------------------------------------------------------
+   Anonymous recommendation flow
+--------------------------------------------------------- */
+
 app.use(
   "/api/anonymous-analysis",
   anonymousAnalysisRoutes
 );
 
-/* Authentication */
-app.use("/api/auth", authRoutes);
 
-/* Skin profile */
-app.use("/api/skin-profile", skinProfileRoutes);
+/* ---------------------------------------------------------
+   Authentication
+--------------------------------------------------------- */
 
-/* Recommendations */
+app.use(
+  "/api/auth",
+  authRoutes
+);
+
+
+/* ---------------------------------------------------------
+   Skin profile
+--------------------------------------------------------- */
+
+app.use(
+  "/api/skin-profile",
+  skinProfileRoutes
+);
+
+
+/* ---------------------------------------------------------
+   Recommendations
+--------------------------------------------------------- */
+
 app.use(
   "/api/recommendations",
   recommendationRoutes
 );
 
-/* Products */
+
+/* ---------------------------------------------------------
+   Products
+--------------------------------------------------------- */
+
 app.use(
   "/api/products/:productId/offers",
   productOfferRoutes
 );
 
-app.use("/api/products", productRoutes);
+app.use(
+  "/api/products",
+  productRoutes
+);
 
-/* Product clicks */
+
+/* ---------------------------------------------------------
+   Product clicks
+--------------------------------------------------------- */
+
 app.use(
   "/api/product-clicks",
   productClickRoutes
 );
 
-/* Ingredients */
+
+/* ---------------------------------------------------------
+   Ingredients
+--------------------------------------------------------- */
+
 app.use(
   "/api/ingredients",
   ingredientRoutes
 );
 
-/* Brands */
-app.use("/api/brands", brandRoutes);
 
-/* Categories */
+/* ---------------------------------------------------------
+   Brands
+--------------------------------------------------------- */
+
+app.use(
+  "/api/brands",
+  brandRoutes
+);
+
+
+/* ---------------------------------------------------------
+   Categories
+--------------------------------------------------------- */
+
 app.use(
   "/api/categories",
   categoryRoutes
 );
 
-/* Retailers */
+
+/* ---------------------------------------------------------
+   Retailers
+--------------------------------------------------------- */
+
 app.use(
   "/api/retailers",
   retailerRoutes
 );
 
-/* Chat */
-app.use("/api/chat", chatRoutes);
 
-/* Product imports */
+/* ---------------------------------------------------------
+   Chat
+--------------------------------------------------------- */
+
+app.use(
+  "/api/chat",
+  chatRoutes
+);
+
+
+/* ---------------------------------------------------------
+   Product imports
+--------------------------------------------------------- */
+
 app.use(
   "/api/product-imports",
   productImportRoutes
 );
 
-/* Seller discovery */
+
+/* ---------------------------------------------------------
+   Seller discovery
+--------------------------------------------------------- */
+
 app.use(
   "/api/seller-discovery",
   sellerDiscoveryRoutes
 );
 
-/* Research */
+
+/* ---------------------------------------------------------
+   Research
+--------------------------------------------------------- */
+
 app.use(
   "/api/research",
   researchRoutes
 );
 
-/* Admin */
-app.use("/api/admin", adminRoutes);
+
+/* ---------------------------------------------------------
+   Admin
+--------------------------------------------------------- */
+
+app.use(
+  "/api/admin",
+  adminRoutes
+);
+
 
 /* =========================================================
    404 HANDLER
@@ -212,8 +366,10 @@ app.use((req, res, next) => {
   );
 
   res.status(404);
+
   next(error);
 });
+
 
 /* =========================================================
    GLOBAL ERROR HANDLER
@@ -237,6 +393,7 @@ app.use((err, req, res, next) => {
 
   res.status(statusCode).json({
     success: false,
+
     message:
       err.name === "CastError"
         ? `Invalid ${
@@ -244,7 +401,8 @@ app.use((err, req, res, next) => {
             err.path ||
             "document"
           } reference: ${err.value}`
-        : err.message || "Internal Server Error",
+        : err.message ||
+          "Internal Server Error",
 
     stack:
       process.env.NODE_ENV === "production"
@@ -253,46 +411,61 @@ app.use((err, req, res, next) => {
   });
 });
 
+
 /* =========================================================
    SERVER
 ========================================================= */
 
-const PORT = process.env.PORT || 5000;
+const PORT =
+  process.env.PORT || 5000;
 
-const server = app.listen(PORT, () => {
-  console.log(
-    `🚀 Server listening in [${
-      process.env.NODE_ENV || "development"
-    }] mode on port ${PORT}`
-  );
 
-  console.log(
-    `🌐 API: http://localhost:${PORT}`
-  );
+const server = app.listen(
+  PORT,
+  () => {
+    console.log(
+      `🚀 Server listening in [${
+        process.env.NODE_ENV ||
+        "development"
+      }] mode on port ${PORT}`
+    );
 
-  console.log(
-    `❤️ Health: http://localhost:${PORT}/health`
-  );
-});
+    console.log(
+      `🌐 API: http://localhost:${PORT}`
+    );
+
+    console.log(
+      `❤️ Health: http://localhost:${PORT}/health`
+    );
+  }
+);
+
 
 /* =========================================================
    PROCESS ERROR HANDLERS
 ========================================================= */
 
-process.on("unhandledRejection", (err) => {
-  console.error(
-    `💥 Unhandled Rejection: ${err.message}`
-  );
+process.on(
+  "unhandledRejection",
+  (err) => {
+    console.error(
+      `💥 Unhandled Rejection: ${err.message}`
+    );
 
-  server.close(() => {
+    server.close(() => {
+      process.exit(1);
+    });
+  }
+);
+
+
+process.on(
+  "uncaughtException",
+  (err) => {
+    console.error(
+      `💥 Uncaught Exception: ${err.message}`
+    );
+
     process.exit(1);
-  });
-});
-
-process.on("uncaughtException", (err) => {
-  console.error(
-    `💥 Uncaught Exception: ${err.message}`
-  );
-
-  process.exit(1);
-});
+  }
+);
