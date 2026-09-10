@@ -9,9 +9,8 @@ export const API_PATHS = {
     '/api/skin-profile/save-anonymous',
 },
 
-anonymousAnalysisConsent:
+anonymousConsent:
   '/api/anonymous-analysis/consent',
-
 anonymousAnalysis:
   '/api/anonymous-analysis',
   products: {
