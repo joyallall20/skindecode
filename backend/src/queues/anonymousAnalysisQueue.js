@@ -1,3 +1,4 @@
+
 import { Queue } from 'bullmq';
 
 const redisUrl =
@@ -23,28 +24,27 @@ export const anonymousAnalysisQueue =
     },
   });
 
-export const enqueueAnonymousAnalysis =
-  async ({
-    profile,
-    consent,
-    sessionHash,
-  }) => {
-    const job =
-      await anonymousAnalysisQueue.add(
-        'analyze',
-        {
-          profile,
-          consent,
-          sessionHash,
-        },
-        {
-          jobId: `anon-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2, 10)}`,
-        }
-      );
+export const enqueueAnonymousAnalysis = async ({
+  profile,
+  consent,
+  sessionHash,
+}) => {
+  const job = await anonymousAnalysisQueue.add(
+    'analyze',
+    {
+      profile,
+      consent,
+      sessionHash,
+    },
+    {
+      jobId: `anon-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`,
+    }
+  );
 
-    return job;
-  };
+  return job;
+};
 
 export default anonymousAnalysisQueue;
+
