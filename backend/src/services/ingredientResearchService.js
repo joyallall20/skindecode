@@ -43,10 +43,12 @@ const RESEARCH_SYSTEM_PROMPT = [
 export const buildIngredientResearchPrompt = ({
   ingredientName,
   productContext = null,
+  category = 'general',
   existingRecord = null,
 }) =>
   [
     `Research the cosmetic/skincare ingredient: ${ingredientName}.`,
+    `Product category/domain: ${category || 'general'}`,
     productContext ? `Product context: ${productContext}` : '',
     existingRecord
       ? 'An existing knowledge record exists. Propose an update only where new evidence is justified. Do not copy unverifiable claims.'
@@ -229,6 +231,7 @@ export const runIngredientResearch = async ({
   ingredientName,
   productId = null,
   productContext = null,
+  category = 'general',
   isUpdate = false,
 } = {}) => {
   const name = String(ingredientName || '').trim();
@@ -238,9 +241,12 @@ export const runIngredientResearch = async ({
   }
 
   const normalizedName = normalizeIngredientToken(name);
+  const normalizedCategory =
+    String(category || 'general').trim().toLowerCase() || 'general';
 
   let queue = await IngredientResearch.findOne({
     normalizedName,
+    category: normalizedCategory,
     status: {
       $in: [
         'research_needed',
@@ -254,7 +260,8 @@ export const runIngredientResearch = async ({
   if (!queue) {
     const created = await recordUnknownIngredients(
       [name],
-      productId
+      productId,
+      category
     );
 
     queue = created?.[0];
@@ -314,6 +321,7 @@ export const runIngredientResearch = async ({
     '[knowledge] Gemini research started',
     {
       name,
+      category: normalizedCategory,
       attempt: queue.researchAttempts,
     }
   );
@@ -326,6 +334,7 @@ export const runIngredientResearch = async ({
     prompt: buildIngredientResearchPrompt({
       ingredientName: name,
       productContext,
+      category: normalizedCategory,
       existingRecord,
     }),
     responseSchema: INGREDIENT_RESEARCH_GEMINI_SCHEMA,
@@ -520,11 +529,13 @@ export const queueUnknownsAndMaybeResearch = async (
   {
     productId = null,
     productContext = null,
+    category = 'general',
   } = {}
 ) => {
   const queued = await recordUnknownIngredients(
     unknownNames,
-    productId
+    productId,
+    category
   );
 
   if (!isAutoResearchEnabled()) {
@@ -546,6 +557,7 @@ export const queueUnknownsAndMaybeResearch = async (
           ingredientName: item.ingredientName,
           productId,
           productContext,
+          category,
         })
       );
     }

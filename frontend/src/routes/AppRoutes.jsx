@@ -1,15 +1,15 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route } from 'react-router-dom';
 
-import ProtectedRoute from "./ProtectedRoute.jsx";
-import AdminRoute from "./AdminRoute.jsx";
+import ProtectedRoute from './ProtectedRoute.jsx';
+import AdminRoute from './AdminRoute.jsx';
 
-import TermsPage from "../legal/TermsPage.jsx";
-import PrivacyPolicyPage from "../legal/PrivacyPolicyPage.jsx";
-import AffiliateDisclosurePage from "../legal/AffiliateDisclosurePage.jsx";
-import VerifyEmailPage from "../pages/VerifyEmailPage.jsx";
+import TermsPage from '../legal/TermsPage.jsx';
+import PrivacyPolicyPage from '../legal/PrivacyPolicyPage.jsx';
+import AffiliateDisclosurePage from '../legal/AffiliateDisclosurePage.jsx';
+import VerifyEmailPage from '../pages/VerifyEmailPage.jsx';
 
 // Skin Routine is imported directly
-import SkinRoutinePage from "../pages/SkinRoutinePage.jsx";
+import SkinRoutinePage from '../pages/SkinRoutinePage.jsx';
 
 import {
   LandingPage,
@@ -32,42 +32,74 @@ import {
   AdminImportDetailPage,
   AdminIntelligenceTestPage,
   AdminKnowledgePage,
-} from "../pages/index.js";
+} from '../pages/index.js';
+
 
 const AppRoutes = () => {
   return (
     <Routes>
+
       {/* =========================
           PUBLIC ROUTES
       ========================= */}
 
-      <Route path="/" element={<LandingPage />} />
+      <Route
+        path="/"
+        element={<LandingPage />}
+      />
 
-      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route
+        path="/verify-email"
+        element={<VerifyEmailPage />}
+      />
 
-      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/login"
+        element={<LoginPage />}
+      />
 
-      <Route path="/signup" element={<SignupPage />} />
+      <Route
+        path="/signup"
+        element={<SignupPage />}
+      />
 
       {/* Skin questionnaire */}
-      <Route path="/onboarding" element={<OnboardingPage />} />
+      <Route
+        path="/onboarding"
+        element={<OnboardingPage />}
+      />
 
       {/* Products */}
-      <Route path="/products" element={<ProductsPage />} />
+      <Route
+        path="/products"
+        element={<ProductsPage />}
+      />
 
       {/* Skin Routine - Coming Soon */}
-      <Route path="/skin-routine" element={<SkinRoutinePage />} />
+      <Route
+        path="/skin-routine"
+        element={<SkinRoutinePage />}
+      />
 
       {/* Product Detail */}
-      <Route path="/products/:id" element={<ProductDetailPage />} />
+      <Route
+        path="/products/:id"
+        element={<ProductDetailPage />}
+      />
 
       {/* =========================
           LEGAL ROUTES
       ========================= */}
 
-      <Route path="/terms" element={<TermsPage />} />
+      <Route
+        path="/terms"
+        element={<TermsPage />}
+      />
 
-      <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      <Route
+        path="/privacy"
+        element={<PrivacyPolicyPage />}
+      />
 
       <Route
         path="/affiliate-disclosure"
@@ -221,7 +253,11 @@ const AppRoutes = () => {
           FALLBACK
       ========================= */}
 
-      <Route path="*" element={<LandingPage />} />
+      <Route
+        path="*"
+        element={<LandingPage />}
+      />
+
     </Routes>
   );
 };

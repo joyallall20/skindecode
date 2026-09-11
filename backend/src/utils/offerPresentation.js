@@ -16,6 +16,9 @@ export const sanitizeOfferForCustomer = (offer = {}) => {
 
   return {
     _id: offer._id,
+    product: offer.product
+      ? (offer.product._id ? offer.product._id : offer.product)
+      : undefined,
     price: offer.price,
     currency: offer.currency || 'INR',
     inStock: offer.inStock,

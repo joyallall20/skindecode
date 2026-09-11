@@ -9,11 +9,63 @@ const recommendationProductSchema =
         required: true,
       },
 
+      /*
+       * Legacy rank field.
+       *
+       * Kept for backwards compatibility.
+       * It now represents category-local rank.
+       */
       rank: {
         type: Number,
         required: true,
+        min: 1,
       },
 
+      /*
+       * Category-local ranking.
+       *
+       * Example:
+       *
+       * Sunscreens:
+       *   #1
+       *   #2
+       *   #3
+       *
+       * Moisturizers:
+       *   #1
+       *   #2
+       *   #3
+       */
+      categoryRank: {
+        type: Number,
+        required: true,
+        min: 1,
+      },
+
+      /*
+       * Canonical category used for the recommendation.
+       */
+      recommendationCategory: {
+        type: String,
+        required: true,
+        enum: [
+          'Cleansers',
+          'Moisturizers',
+          'Sunscreens',
+          'Serums',
+          'Exfoliants',
+          'Toners & Essences',
+          'Retinoids & Anti-Aging',
+          'Eye Creams & Serums',
+          'Face Masks',
+          'Facial Oils',
+        ],
+      },
+
+      /*
+       * Deterministic compatibility score produced
+       * by the matching engine.
+       */
       compatibilityScore: {
         type: Number,
         min: 0,
@@ -42,21 +94,6 @@ const recommendationProductSchema =
       explanation: {
         type: String,
         default: '',
-      },
-
-      price: {
-        type: Number,
-        default: null,
-      },
-
-      retailer: {
-        type: mongoose.Schema.Types.Mixed,
-        default: null,
-      },
-
-      offerUrl: {
-        type: String,
-        default: null,
       },
     },
     {
@@ -105,8 +142,8 @@ const recommendationSchema =
           default: [],
         },
 
-        /**
-         * New onboarding avoidance preferences.
+        /*
+         * Onboarding avoidance preferences.
          *
          * Examples:
          * fragrance
@@ -138,8 +175,8 @@ const recommendationSchema =
           default: [],
         },
 
-        /**
-         * Legacy fields retained so old
+        /*
+         * Legacy fields retained so older
          * recommendation snapshots remain valid.
          */
         ageRange: {
@@ -175,6 +212,12 @@ const recommendationSchema =
         },
       },
 
+      /*
+       * Recommendation contains ONLY recommendation data.
+       *
+       * Product pricing / retailer information is NOT stored here.
+       * Those values come from ProductOffer separately.
+       */
       products: {
         type: [recommendationProductSchema],
         default: [],

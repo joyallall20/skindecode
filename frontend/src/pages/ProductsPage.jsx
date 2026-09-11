@@ -4,8 +4,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import apiClient from '../api/axios.js';
 import { API_PATHS } from '../utils/constants.js';
 import ProductGrid from '../components/products/ProductGrid.jsx';
-import { getMarketplacePrices, getProductRating } from '../components/products/ProductCard.jsx';
+import { getRetailerOffers, getProductRating } from '../components/products/ProductCard.jsx';
 import { getLatestRecommendations } from '../api/recommendationApi.js';
+import { getProductOffersBatch } from '../api/productApi.js';
 import './ProductsPage.css';
 import { Navigation } from '../components/Navigation/index.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -364,6 +365,41 @@ function productMatchesCategory(product, activeCategoryId, displayCategories) {
   return false;
 }
 
+/**
+ * Category filter that prefers the backend-assigned
+ * recommendationCategory before falling back to inference.
+ *
+ * This keeps the UI aligned with the deterministic
+ * category-local ranking produced by the backend.
+ */
+function recommendationMatchesCategory(
+  product,
+  activeCategoryId,
+  displayCategories
+) {
+  if (!activeCategoryId) return true;
+
+  const recommendationCategory =
+    product?.recommendation?.recommendationCategory;
+
+  if (recommendationCategory) {
+    const display = displayCategories.find(
+      (category) =>
+        category.label === recommendationCategory
+    );
+
+    if (display) {
+      return display.id === activeCategoryId;
+    }
+  }
+
+  return productMatchesCategory(
+    product,
+    activeCategoryId,
+    displayCategories
+  );
+}
+
 function productMatchesSearch(product, term) {
   const q = (term || '').trim().toLowerCase();
   if (!q) return true;
@@ -391,11 +427,11 @@ function productMatchesBrand(product, brandId) {
 function productMatchesPriceRange(product, minPrice, maxPrice) {
   if (!minPrice && !maxPrice) return true;
 
-  const marketplacePrices = getMarketplacePrices(product);
+  const retailerOffers = getRetailerOffers(product);
   const recommendationPrice = product?.recommendation?.price;
-  
-  const candidatePrices = marketplacePrices.length > 0
-    ? marketplacePrices.map((mp) => mp.price)
+
+  const candidatePrices = retailerOffers.length > 0
+    ? retailerOffers.map((offer) => offer.price)
     : (Number.isFinite(Number(recommendationPrice)) ? [Number(recommendationPrice)] : []);
 
   if (candidatePrices.length === 0) return true;
@@ -775,32 +811,90 @@ export default function ProductsPage() {
     return readRecommendations(onboardingAnalysis);
   }, [isAuthenticated, authenticatedRecommendation, onboardingAnalysis]);
 
-  // Preserve complete recommendation metadata while extracting products
+  // Preserve complete recommendation metadata while extracting products.
+  //
+  // IMPORTANT:
+  //
+  // The backend now returns categoryRank and
+  // recommendationCategory explicitly.
+  //
+  // We preserve those exact values rather than
+  // reconstructing ranking on the client.
   const recommendedProducts = useMemo(() => {
     const seen = new Set();
     const items = [];
-    
+
     recommendations.forEach((item) => {
       const product = item?.product || item;
-      if (product?._id && !seen.has(product._id)) {
-        seen.add(product._id);
-        items.push({
-          ...product,
-          recommendation: {
-            rank: item?.rank ?? null,
-            compatibilityScore: item?.compatibilityScore ?? item?.score ?? null,
-            matchedFactors: item?.matchedFactors ?? [],
-            concernsMatched: item?.concernsMatched ?? [],
-            concernsNotMatched: item?.concernsNotMatched ?? [],
-            explanation: item?.explanation ?? product?.productIntelligence?.explanation ?? null,
-            price: item?.price ?? null,
-            retailer: item?.retailer ?? null,
-            offerUrl: item?.offerUrl ?? null,
-          },
-        });
+
+      if (!product?._id || seen.has(product._id)) {
+        return;
       }
+
+      seen.add(product._id);
+
+      items.push({
+        ...product,
+
+        recommendation: {
+          // Category-local ranking from backend.
+          categoryRank: item?.categoryRank ?? null,
+
+          // Canonical category assigned by backend.
+          recommendationCategory:
+            item?.recommendationCategory ?? null,
+
+          // Keep score metadata available to the UI.
+          compatibilityScore:
+            item?.overallScore ??
+            item?.compatibilityScore ??
+            item?.score ??
+            null,
+
+          evidenceConfidence:
+            item?.evidenceConfidence ?? null,
+
+          evidenceLevel:
+            item?.evidenceLevel ?? null,
+
+          confidence:
+            item?.confidence ?? null,
+
+          matchedFactors:
+            item?.matchedFactors ?? [],
+
+          concernsMatched:
+            item?.concernsMatched ?? [],
+
+          concernsNotMatched:
+            item?.concernsNotMatched ?? [],
+
+          positiveReasons:
+            item?.positiveReasons ?? [],
+
+          warnings:
+            item?.warnings ?? [],
+
+          hardConflicts:
+            item?.hardConflicts ?? [],
+
+          explanation:
+            item?.explanation ??
+            product?.productIntelligence?.explanation ??
+            null,
+
+          price:
+            item?.price ?? null,
+
+          retailer:
+            item?.retailer ?? null,
+
+          offerUrl:
+            item?.offerUrl ?? null,
+        },
+      });
     });
-    
+
     return items;
   }, [recommendations]);
 
@@ -811,12 +905,24 @@ export default function ProductsPage() {
 
   const filteredRecommendedProducts = useMemo(() => {
     return recommendedProducts.filter((product) =>
-      productMatchesCategory(product, filters.category, displayCategories) &&
+      recommendationMatchesCategory(
+        product,
+        filters.category,
+        displayCategories
+      ) &&
       productMatchesSearch(product, filters.search) &&
       productMatchesBrand(product, filters.brand) &&
-      productMatchesPriceRange(product, filters.minPrice, filters.maxPrice)
+      productMatchesPriceRange(
+        product,
+        filters.minPrice,
+        filters.maxPrice
+      )
     );
-  }, [recommendedProducts, filters, displayCategories]);
+  }, [
+    recommendedProducts,
+    filters,
+    displayCategories,
+  ]);
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
@@ -825,6 +931,99 @@ export default function ProductsPage() {
   const displayedProducts = useMemo(
     () => filteredRecommendedProducts.slice(0, visibleCount),
     [filteredRecommendedProducts, visibleCount],
+  );
+
+  // Recommendation highlight IDs for ProductGrid.
+  const recommendedProductIds = useMemo(
+    () =>
+      displayedProducts
+        .map((product) => product?._id)
+        .filter(Boolean),
+    [displayedProducts]
+  );
+
+  // ---------------------------------------------------------------
+  // Retailer offers for the visible product cards.
+  //
+  // Retailer prices come from real ProductOffer records, fetched in
+  // ONE batched request per page of results (not one request per
+  // card — see getProductOffersBatch in productApi.js). Only the
+  // currently-displayed product IDs are requested, and each ID is
+  // only ever fetched once, so "Load more" / filter changes only
+  // fetch offers for the newly-revealed products.
+  // ---------------------------------------------------------------
+  const [offersByProductId, setOffersByProductId] = useState({});
+  const [offersLoading, setOffersLoading] = useState(false);
+  const fetchedOfferIdsRef = useRef(new Set());
+
+  useEffect(() => {
+    const idsToFetch = recommendedProductIds.filter(
+      (id) => !fetchedOfferIdsRef.current.has(id)
+    );
+
+    if (idsToFetch.length === 0) return undefined;
+
+    idsToFetch.forEach((id) => fetchedOfferIdsRef.current.add(id));
+
+    let cancelled = false;
+    setOffersLoading(true);
+
+    getProductOffersBatch(idsToFetch)
+      .then((response) => {
+        if (cancelled) return;
+
+        // productApi.js's unwrap() only strips the axios envelope,
+        // leaving the raw JSON body ({ success, data }). Dig into
+        // .data for the actual payload — same normalization every
+        // other endpoint in this file already needs (see
+        // getLatestRecommendations handling below).
+        const payload = response?.data ?? response ?? {};
+
+        // Backend groups offers as { [productId]: Offer[] }, but
+        // normalize defensively in case it's ever an array of
+        // { productId, offers } entries instead.
+        const entries = Array.isArray(payload)
+          ? payload.map((entry) => [
+              String(entry?.productId ?? entry?._id ?? ''),
+              Array.isArray(entry?.offers) ? entry.offers : [],
+            ])
+          : Object.entries(payload || {}).map(([id, offers]) => [
+              String(id),
+              Array.isArray(offers) ? offers : [],
+            ]);
+
+        setOffersByProductId((prev) => {
+          const next = { ...prev };
+          entries.forEach(([id, offers]) => {
+            if (id) next[id] = offers;
+          });
+          return next;
+        });
+      })
+      .catch(() => {
+        // Offers are secondary info - a failed batch fetch must not
+        // break the page. Un-mark these IDs so a later re-render
+        // (e.g. after a filter change) can retry them.
+        idsToFetch.forEach((id) => fetchedOfferIdsRef.current.delete(id));
+      })
+      .finally(() => {
+        if (!cancelled) setOffersLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recommendedProductIds]);
+
+  // Attach each product's real offers so ProductCard/price filtering
+  // never touch guessed inline fields.
+  const displayedProductsWithOffers = useMemo(
+    () =>
+      displayedProducts.map((product) => ({
+        ...product,
+        offers: offersByProductId[product._id] ?? product.offers ?? [],
+      })),
+    [displayedProducts, offersByProductId]
   );
 
   const hasMore = visibleCount < filteredRecommendedProducts.length;
@@ -919,7 +1118,9 @@ export default function ProductsPage() {
           </div>
 
           <ProductGrid
-            products={displayedProducts}
+            products={displayedProductsWithOffers}
+            recommendedProductIds={recommendedProductIds}
+            offersLoading={offersLoading}
             isLoading={recommendationLoading}
             hasFilters={hasActiveFilters}
             emptyTitle={emptyTitle}

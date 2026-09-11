@@ -41,6 +41,50 @@ export const getProductOffers = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: responseOffers });
 });
 
+// Batched retailer offers for a set of products in one request, so a
+// product listing page doesn't issue one getProductOffers() call per
+// card. Reuses the same ProductOffer query + sanitizeOffersForCustomer
+// shaping as the single-product endpoint above - no second pricing
+// model, no ranking/discount logic.
+export const getProductOffersBatch = asyncHandler(async (req, res) => {
+  const isAdmin = req.user && req.user.role === 'admin';
+
+  const rawIds = String(req.query.productIds || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  const productIds = [...new Set(rawIds)].filter((id) =>
+    mongoose.Types.ObjectId.isValid(id)
+  );
+
+  if (productIds.length === 0) {
+    return res.status(200).json({ success: true, data: {} });
+  }
+
+  const query = { product: { $in: productIds } };
+  if (!isAdmin) {
+    query.isActive = true;
+  }
+
+  const offers = await ProductOffer.find(query)
+    .populate('product', 'name slug isActive')
+    .populate('retailer', 'name slug website affiliateProgram')
+    .lean();
+
+  const responseOffers = isAdmin ? offers : sanitizeOffersForCustomer(offers);
+
+  const groupedByProductId = {};
+  responseOffers.forEach((offer) => {
+    const key = String(offer.product?._id ?? offer.product ?? '');
+    if (!key) return;
+    if (!groupedByProductId[key]) groupedByProductId[key] = [];
+    groupedByProductId[key].push(offer);
+  });
+
+  res.status(200).json({ success: true, data: groupedByProductId });
+});
+
 export const createProductOffer = asyncHandler(async (req, res) => {
   if (!req.user || req.user.role !== 'admin') {
     throw new ApiError(403, 'Admin access required to create product offers.');
@@ -166,6 +210,7 @@ export const deleteProductOffer = asyncHandler(async (req, res) => {
 
 export default {
   getProductOffers,
+  getProductOffersBatch,
   createProductOffer,
   updateProductOffer,
   deleteProductOffer,

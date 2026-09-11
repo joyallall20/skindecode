@@ -20,3 +20,14 @@ export const getProductsByBrand = (brandId) =>
 
 export const getProductOffers = (productId) =>
   apiClient.get(API_PATHS.products.offers(productId)).then(unwrap);
+
+// Batched retailer offers for a product listing page, so a grid of
+// N products issues one request instead of N individual
+// getProductOffers() calls. Requires an API_PATHS.products.offersBatch
+// entry — see the note left for the constants.js / backend changes.
+export const getProductOffersBatch = (productIds = []) =>
+  apiClient
+    .get(API_PATHS.products.offersBatch, {
+      params: { productIds: productIds.join(',') },
+    })
+    .then(unwrap);

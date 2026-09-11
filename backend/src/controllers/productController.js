@@ -260,6 +260,17 @@ export const updateProduct = asyncHandler(async (req, res) => {
   }
 
   const { fields } = await buildEditorProductFields(req.body, existingProduct);
+
+  // Always preserve the complete raw ingredient list entered by admin.
+  // Product Intelligence uses this as the source of truth when ingredient
+  // references have not yet been created/resolved.
+  if (
+    typeof req.body.ingredientListText === 'string' &&
+    req.body.ingredientListText.trim()
+  ) {
+    fields.ingredientListText = req.body.ingredientListText.trim();
+  }
+
   const intelligenceChanged = hasIntelligenceRelevantProductChanges(existingProduct, {
     ...req.body,
     ...fields,

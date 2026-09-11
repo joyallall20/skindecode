@@ -23,6 +23,8 @@ export const API_PATHS = {
       `/api/products/brand/${brandId}`,
     offers: (productId) =>
       `/api/products/${productId}/offers`,
+    offersBatch:
+      '/api/products/offers',
     offerById: (productId, offerId) =>
       `/api/products/${productId}/offers/${offerId}`,
     create: '/api/products',

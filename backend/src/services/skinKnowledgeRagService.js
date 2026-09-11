@@ -22,6 +22,20 @@ const VECTOR_PATH =
   "embedding";
 
 /**
+ * Normalize a category value for consistent matching.
+ *
+ * The SkinKnowledgeChunk schema stores `category` trimmed
+ * and lowercased, so callers must be normalized the same way.
+ */
+function normalizeCategory(category) {
+  if (typeof category !== "string") return null;
+
+  const normalized = category.trim().toLowerCase();
+
+  return normalized || null;
+}
+
+/**
  * Semantic search against the clinical skincare knowledge base.
  *
  * Important:
@@ -51,6 +65,7 @@ export async function searchSkinKnowledge(
     chunkType = null,
     evidenceLevel = null,
     skinType = null,
+    category = null,
   } = options;
 
   const safeLimit = Math.min(
@@ -64,6 +79,8 @@ export async function searchSkinKnowledge(
     ? Number(minScore)
     : DEFAULT_MIN_SCORE;
 
+  const safeCategory = normalizeCategory(category);
+
   // ----------------------------------------------------------
   // QUERY EMBEDDING
   // ----------------------------------------------------------
@@ -75,9 +92,10 @@ export async function searchSkinKnowledge(
   // ATLAS FILTERS
   // ----------------------------------------------------------
 
-  const filter = {
-    isActive: true,
-  };
+ const filter = {
+  isActive: true,
+  researchStatus: 'verified',
+};
 
   if (ingredientKey) {
     filter.ingredientKey = ingredientKey;
@@ -97,6 +115,29 @@ export async function searchSkinKnowledge(
 
   if (skinType) {
     filter.skinType = skinType;
+  }
+
+  /*
+   * Category scoping.
+   *
+   * Do NOT force every ingredient to have a category-specific
+   * chunk. For a sunscreen request we want:
+   *
+   *   category = "sunscreen"
+   *   OR
+   *   category = "general"
+   *
+   * because general skincare knowledge (e.g. niacinamide,
+   * glycerin, ceramides) is still relevant inside a sunscreen
+   * context.
+   *
+   * When no category is supplied, no category filter is applied
+   * and all active chunks remain eligible.
+   */
+  if (safeCategory) {
+    filter.category = {
+      $in: [safeCategory, "general"],
+    };
   }
 
   // ----------------------------------------------------------
@@ -136,6 +177,7 @@ export async function searchSkinKnowledge(
         ingredientKey: 1,
         ingredientName: 1,
         inciName: 1,
+        category: 1,
 
         chunkType: 1,
         concern: 1,
@@ -188,6 +230,7 @@ export async function searchSkinKnowledge(
     {
       question:
         question.slice(0, 120),
+      category: safeCategory,
       retrieved: results.length,
       accepted:
         filteredResults.length,
@@ -270,6 +313,9 @@ export function buildKnowledgeContext(
         `INCI: ${
           result.inciName || "Unknown"
         }`,
+        result.category
+          ? `Category: ${result.category}`
+          : null,
         `Topic: ${
           result.chunkType || "general"
         }`,

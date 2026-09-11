@@ -1,9 +1,17 @@
-import { getGroqConfig, isGroqConfigured } from "../config/aiConfig.js";
+import {
+  getGroqConfig,
+  isGroqConfigured,
+} from "../config/aiConfig.js";
+
 
 const sanitizeError = (message) =>
   String(message || "Groq request failed.")
-    .replace(/gsk_[a-zA-Z0-9]+/g, "[REDACTED_KEY]")
+    .replace(
+      /gsk_[a-zA-Z0-9]+/g,
+      "[REDACTED_GROQ_KEY]"
+    )
     .trim();
+
 
 const parseJsonSafely = (text) => {
   if (!text?.trim()) {
@@ -18,35 +26,43 @@ const parseJsonSafely = (text) => {
       data: JSON.parse(text),
       parseError: null,
     };
-  } catch (e) {
-    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  } catch (error) {
+    const match =
+      text.match(
+        /```(?:json)?\s*([\s\S]*?)```/i
+      );
 
     if (match?.[1]) {
       try {
         return {
-          data: JSON.parse(match[1].trim()),
+          data: JSON.parse(
+            match[1].trim()
+          ),
           parseError: null,
         };
-      } catch (nested) {
+      } catch (nestedError) {
         return {
           data: null,
-          parseError: nested.message,
+          parseError: nestedError.message,
         };
       }
     }
 
     return {
       data: null,
-      parseError: e.message,
+      parseError: error.message,
     };
   }
 };
+
 
 // ============================================================
 // MODEL RESOLUTION
 // ============================================================
 
-const getGroqModel = (modelKey = "chat") => {
+const getGroqModel = (
+  modelKey = "chat"
+) => {
   const models = {
     extraction:
       process.env.GROQ_EXTRACTION_MODEL ||
@@ -60,20 +76,29 @@ const getGroqModel = (modelKey = "chat") => {
       process.env.GROQ_VALIDATION_MODEL ||
       "openai/gpt-oss-20b",
 
+    /**
+     * Product Intelligence fallback model.
+     */
+    intelligence:
+      process.env.GROQ_INTELLIGENCE_MODEL ||
+      "openai/gpt-oss-120b",
+
     explanation:
       process.env.GROQ_EXPLANATION_MODEL ||
       "openai/gpt-oss-20b",
 
-    // Chat uses the explanation model unless a dedicated
-    // GROQ_CHAT_MODEL is added later.
     chat:
       process.env.GROQ_CHAT_MODEL ||
       process.env.GROQ_EXPLANATION_MODEL ||
       "openai/gpt-oss-20b",
   };
 
-  return models[modelKey] || models.chat;
+  return (
+    models[modelKey] ||
+    models.chat
+  );
 };
+
 
 // ============================================================
 // GROQ REQUEST
@@ -91,18 +116,32 @@ const callGroq = async ({
     return {
       ok: false,
       configured: false,
-      error: "Groq API is not configured. Set GROQ_API_KEY.",
+      error:
+        "Groq API is not configured. Set GROQ_API_KEY.",
     };
   }
 
-  const { apiKey, baseUrl } = getGroqConfig();
+  const {
+    apiKey,
+    baseUrl,
+  } = getGroqConfig();
+
+  const jsonSystemInstruction =
+    'Return the response as valid JSON only. Do not return markdown, explanations, commentary, or code fences.';
+
+  const finalSystemPrompt = [
+    systemPrompt,
+    jsonMode ? jsonSystemInstruction : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 
   const messages = [];
 
-  if (systemPrompt) {
+  if (finalSystemPrompt) {
     messages.push({
       role: "system",
-      content: systemPrompt,
+      content: finalSystemPrompt,
     });
   }
 
@@ -127,60 +166,81 @@ const callGroq = async ({
     };
   }
 
-  const inputChars = messages.reduce(
-    (sum, message) =>
-      sum + String(message.content || "").length,
-    0
-  );
-
-  try {
-    const response = await fetch(
-      `${baseUrl}/chat/completions`,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-
-        body: JSON.stringify(body),
-      }
+  const inputChars =
+    messages.reduce(
+      (sum, message) =>
+        sum +
+        String(
+          message.content || ""
+        ).length,
+      0
     );
 
-    const payload = await response
-      .json()
-      .catch(() => ({}));
+  try {
+    const response =
+      await fetch(
+        `${baseUrl}/chat/completions`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            Authorization:
+              `Bearer ${apiKey}`,
+          },
+
+          body:
+            JSON.stringify(body),
+        }
+      );
+
+    const payload =
+      await response
+        .json()
+        .catch(() => ({}));
 
     if (!response.ok) {
-      const failedGeneration = String(
-        payload?.error?.failed_generation || ""
-      ).slice(0, 400);
+      console.error(
+        "[groq] API error",
+        {
+          model,
+          status:
+            response.status,
 
-      console.error("[groq] API error", {
-        model,
-        status: response.status,
-        error: payload?.error?.message,
-        inputChars,
-        failedGeneration:
-          failedGeneration || undefined,
-      });
+          error:
+            sanitizeError(
+              payload?.error
+                ?.message
+            ),
+
+          inputChars,
+        }
+      );
 
       return {
         ok: false,
         configured: true,
-        error: sanitizeError(
-          payload?.error?.message ||
-            `Groq HTTP ${response.status}`
-        ),
-        model,
+
+        error:
+          sanitizeError(
+            payload?.error
+              ?.message ||
+              `Groq HTTP ${response.status}`
+          ),
+
         provider: "groq",
+        model,
         inputChars,
       };
     }
 
     const text =
-      payload?.choices?.[0]?.message?.content || "";
+      payload
+        ?.choices?.[0]
+        ?.message?.content ||
+      "";
 
     return {
       ok: true,
@@ -190,76 +250,118 @@ const callGroq = async ({
       rawResponse: payload,
       inputChars,
     };
+
   } catch (error) {
-    console.error("[groq] request error", {
-      model,
-      message: error.message,
-    });
+    console.error(
+      "[groq] request error",
+      {
+        model,
+        message:
+          sanitizeError(
+            error.message
+          ),
+      }
+    );
 
     return {
       ok: false,
       configured: true,
-      error: sanitizeError(error.message),
-      model,
+
+      error:
+        sanitizeError(
+          error.message
+        ),
+
       provider: "groq",
+      model,
     };
   }
 };
 
+
 // ============================================================
-// GROQ JSON
+// GROQ JSON GENERATION
 // ============================================================
 
 export const generateGroqJSON = async ({
   prompt,
   systemPrompt = "",
-  modelKey = "extraction",
+  modelKey = "chat",
   validate,
-  temperature = 0.1,
-  maxTokens = 2500,
+  temperature = 0.2,
+  maxTokens = 4000,
 }) => {
-  const model = getGroqModel(modelKey);
+  const model =
+    getGroqModel(modelKey);
 
-  const result = await callGroq({
-    model,
-    systemPrompt,
-    prompt,
-    temperature,
-    jsonMode: true,
-    maxTokens,
-  });
+  const result =
+    await callGroq({
+      model,
+      systemPrompt,
+      prompt,
+      temperature,
+      jsonMode: true,
+      maxTokens,
+    });
 
   if (!result.ok) {
     return {
       success: false,
       data: null,
-      error: result.error,
-      provider: result.configured
-        ? "groq"
-        : "fallback",
-      model: result.model || model,
+
+      error:
+        result.error,
+
+      provider: "groq",
+      model:
+        result.model ||
+        model,
+
       validationErrors: [],
       parseError: null,
-      fallback: !result.configured,
-      inputChars: result.inputChars,
+      rawText: null,
+
+      rawResponse:
+        result.rawResponse ||
+        null,
+
+      configured:
+        result.configured,
+
+      inputChars:
+        result.inputChars,
     };
   }
 
   const {
     data,
     parseError,
-  } = parseJsonSafely(result.text);
+  } =
+    parseJsonSafely(
+      result.text
+    );
 
   if (parseError) {
     return {
       success: false,
       data: null,
-      error: "Groq returned malformed JSON.",
+
+      error:
+        "Groq returned malformed JSON.",
+
       provider: "groq",
-      model: result.model,
-      parseError,
+      model:
+        result.model,
+
       validationErrors: [],
-      rawText: result.text,
+
+      parseError,
+
+      rawText:
+        result.text,
+
+      rawResponse:
+        result.rawResponse,
     };
   }
 
@@ -268,70 +370,131 @@ export const generateGroqJSON = async ({
       ? validate(data)
       : [];
 
-  if (validationErrors.length) {
+  if (
+    validationErrors.length
+  ) {
+    console.error(
+      "[groq] Product Intelligence schema validation failed:",
+      {
+        model: result.model,
+        validationErrors,
+        rawText: result.text,
+      }
+    );
+
     return {
       success: false,
       data: null,
+
       error:
         "Groq JSON did not match expected schema.",
+
       provider: "groq",
-      model: result.model,
+      model:
+        result.model,
+
       validationErrors,
-      rawText: result.text,
+
+      parseError: null,
+
+      rawText:
+        result.text,
+
+      rawResponse:
+        result.rawResponse,
     };
   }
 
   return {
     success: true,
+
     data,
+
     error: null,
+
     provider: "groq",
-    model: result.model,
+
+    model:
+      result.model,
+
     validationErrors: [],
+
     parseError: null,
-    rawText: result.text,
+
+    rawText:
+      result.text,
+
+    rawResponse:
+      result.rawResponse,
   };
 };
 
+
 // ============================================================
-// GROQ TEXT
+// GROQ TEXT GENERATION
 // ============================================================
 
 export const generateGroqText = async ({
   prompt,
   systemPrompt = "",
   modelKey = "chat",
-  temperature = 0.4,
+  temperature = 0.2,
+  maxTokens = 4000,
 }) => {
-  const model = getGroqModel(modelKey);
+  const model =
+    getGroqModel(modelKey);
 
-  const result = await callGroq({
-    model,
-    systemPrompt,
-    prompt,
-    temperature,
-    jsonMode: false,
-  });
+  const result =
+    await callGroq({
+      model,
+      systemPrompt,
+      prompt,
+      temperature,
+      jsonMode: false,
+      maxTokens,
+    });
 
   if (!result.ok) {
     return {
       success: false,
       text: null,
-      error: result.error,
-      provider: result.configured
-        ? "groq"
-        : "fallback",
-      model,
+
+      error:
+        result.error,
+
+      provider: "groq",
+      model:
+        result.model ||
+        model,
+
+      rawResponse:
+        result.rawResponse ||
+        null,
     };
   }
 
   return {
     success: true,
-    text: result.text,
+
+    text:
+      result.text,
+
+    error: null,
+
     provider: "groq",
-    model: result.model,
+
+    model:
+      result.model,
+
+    rawResponse:
+      result.rawResponse,
   };
 };
+
+
+export const isGroqServiceConfigured =
+  isGroqConfigured;
+
 
 export default {
   generateGroqJSON,

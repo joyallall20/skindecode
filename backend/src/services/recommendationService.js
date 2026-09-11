@@ -3,147 +3,183 @@ import ProductOffer from '../models/ProductOffer.js';
 import Recommendation from '../models/Recommendation.js';
 import SkinProfile from '../models/SkinProfile.js';
 
-import { buildProfileSnapshot } from './recommendationScoringService.js';
 import { computeProductMatch } from './matchingEngineService.js';
 import { getBestCustomerOffer } from '../utils/offerPresentation.js';
-import {
-  isGeminiConfigured,
-  rankCatalogCandidates,
-} from './geminiService.js';
+import { normalizeCategory } from '../utils/normalizeCategory.js';
 
 /**
- * Recommendation generation strategy
- *
- * Normal path:
- *   Catalog → deterministic matching → ranking → recommendations
- *
- * AI path:
- *   Only used when the deterministic engine detects ambiguity,
- *   low confidence, or insufficient strong candidates.
- *
- * Important:
- *   We do NOT generate an AI explanation for every product.
- *   Product intelligence + deterministic match result provide
- *   the explanation by default.
+ * Canonical skinDecode recommendation categories.
  */
-
-const DEFAULT_LIMIT = 5;
-const MAX_CANDIDATES = 25;
+const RECOMMENDATION_CATEGORIES = [
+  'Cleansers',
+  'Moisturizers',
+  'Sunscreens',
+  'Serums',
+  'Exfoliants',
+  'Toners & Essences',
+  'Retinoids & Anti-Aging',
+  'Eye Creams & Serums',
+  'Face Masks',
+  'Facial Oils',
+];
 
 /**
- * Decide whether Gemini intervention is actually useful.
+ * Historical profile snapshot.
  *
- * AI should NOT be used simply because it is configured.
+ * SkinProfile remains the source of truth.
+ * This is only the profile state used when
+ * the recommendation snapshot was generated.
  */
-const shouldUseGemini = ({
-  scoredEntries = [],
-  requestedLimit = DEFAULT_LIMIT,
-}) => {
-  if (!isGeminiConfigured()) {
-    return false;
-  }
+const buildProfileSnapshot = (skinProfile = {}) => ({
+  skinType: skinProfile.skinType || 'unknown',
 
-  if (!scoredEntries.length) {
-    return false;
-  }
+  sensitivity:
+    skinProfile.sensitivity || 'unknown',
 
-  // If we don't have enough candidates, Gemini cannot invent
-  // products, so there is no benefit in calling it.
-  if (scoredEntries.length < requestedLimit) {
-    return false;
-  }
+  morningSkinFeel:
+    skinProfile.morningSkinFeel || 'unknown',
 
-  const top = scoredEntries.slice(0, requestedLimit);
+  responseToNewProducts:
+    skinProfile.responseToNewProducts || 'unknown',
 
-  // Low-confidence recommendations are a good reason
-  // to ask Gemini to help distinguish candidates.
-  const averageConfidence =
-    top.reduce(
-      (sum, entry) =>
-        sum + Number(entry.matchResult?.confidence || 0),
-      0
-    ) / Math.max(top.length, 1);
+  ageRange:
+    skinProfile.ageRange || 'unknown',
 
-  if (averageConfidence < 0.55) {
-    return true;
-  }
+  currentProducts:
+    skinProfile.currentProducts || [],
 
-  // If the scores are extremely close, the rule engine
-  // may not have enough signal to confidently rank them.
-  if (top.length >= 2) {
-    const firstScore = Number(top[0]?.score || 0);
-    const secondScore = Number(top[1]?.score || 0);
+  primaryGoal:
+    skinProfile.primaryGoal || 'unknown',
 
-    if (Math.abs(firstScore - secondScore) <= 2) {
-      return true;
+  concerns:
+    skinProfile.concerns || [],
+
+  allergies:
+    skinProfile.allergies || [],
+
+  avoidedIngredients:
+    skinProfile.avoidedIngredients || [],
+
+  avoidancePreferences:
+    skinProfile.avoidancePreferences || [],
+
+  mustHavePreferences:
+    skinProfile.mustHavePreferences || [],
+
+  sunscreenHabit:
+    skinProfile.sunscreenHabit || 'unknown',
+
+  onboardingAnswers:
+    skinProfile.onboardingAnswers || {},
+
+  budget:
+    skinProfile.budget || {
+      min: 0,
+      max: 5000,
+    },
+});
+
+/**
+ * Deterministic category ranking.
+ *
+ * 1. Compatibility
+ * 2. Matching confidence
+ * 3. Product Intelligence evidence confidence
+ * 4. Stable product ID
+ */
+const sortCategoryProducts = (products = []) => {
+  return [...products].sort((a, b) => {
+    const scoreDifference =
+      Number(b.score || 0) -
+      Number(a.score || 0);
+
+    if (
+      Math.abs(scoreDifference) >
+      0.0001
+    ) {
+      return scoreDifference;
     }
-  }
 
-  // If the overall best score is weak, AI can help interpret
-  // the available structured product intelligence.
-  if (Number(top[0]?.score || 0) < 55) {
-    return true;
-  }
+    const confidenceDifference =
+      Number(b.confidence || 0) -
+      Number(a.confidence || 0);
 
-  return false;
+    if (
+      Math.abs(confidenceDifference) >
+      0.0001
+    ) {
+      return confidenceDifference;
+    }
+
+    const evidenceDifference =
+      Number(
+        b.product
+          ?.productIntelligence
+          ?.evidenceConfidence || 0
+      ) -
+      Number(
+        a.product
+          ?.productIntelligence
+          ?.evidenceConfidence || 0
+      );
+
+    if (
+      Math.abs(evidenceDifference) >
+      0.0001
+    ) {
+      return evidenceDifference;
+    }
+
+    return String(
+      a.product?._id || ''
+    ).localeCompare(
+      String(
+        b.product?._id || ''
+      )
+    );
+  });
 };
 
 /**
- * Build the explanation shown to the user without an AI call.
+ * Generate deterministic recommendations.
  *
- * Priority:
- * 1. Product intelligence explanation
- * 2. Deterministic matching explanation
- * 3. Generic fallback
- */
-const buildRecommendationExplanation = ({
-  product,
-  matchResult,
-}) => {
-  const intelligenceExplanation =
-    product?.productIntelligence?.explanation;
-
-  if (
-    typeof intelligenceExplanation === 'string' &&
-    intelligenceExplanation.trim()
-  ) {
-    return intelligenceExplanation.trim();
-  }
-
-  if (
-    typeof matchResult?.explanation === 'string' &&
-    matchResult.explanation.trim()
-  ) {
-    return matchResult.explanation.trim();
-  }
-
-  const matchedFactors = Array.isArray(
-    matchResult?.matchedFactors
-  )
-    ? matchResult.matchedFactors
-    : [];
-
-  if (matchedFactors.length) {
-    return matchedFactors
-      .slice(0, 3)
-      .join('. ');
-  }
-
-  return 'This product was evaluated against your skin profile and available product information.';
-};
-
-/**
- * Generate recommendations for a user.
+ * IMPORTANT:
+ *
+ * There is NO AI here.
+ *
+ * Flow:
+ *
+ * SkinProfile
+ *      ↓
+ * Product catalog
+ *      ↓
+ * computeProductMatch()
+ *      ↓
+ * hard constraints
+ *      ↓
+ * deterministic compatibility
+ *      ↓
+ * canonical category
+ *      ↓
+ * independent category ranking
+ *      ↓
+ * Recommendation snapshot
+ *
+ * Product offers may be READ here only because
+ * the matching engine may need price for budget
+ * evaluation.
+ *
+ * Offer data is NOT persisted inside Recommendation.
  */
 export const generateRecommendationsForUser = async (
   userId,
   options = {}
 ) => {
-  const requestedLimit = Math.max(
+  const safeLimit = Math.max(
     1,
     Math.min(
-      Number(options.limit || DEFAULT_LIMIT),
-      20
+      Number(options.limit) || 5,
+      50
     )
   );
 
@@ -152,16 +188,17 @@ export const generateRecommendationsForUser = async (
   } = options;
 
   /**
-   * 1. Load profile
+   * 1. LOAD PROFILE
    */
-  const profile = await SkinProfile.findOne({
-    userId,
-  })
-    .populate(
-      'avoidedIngredients',
-      'name aliases'
-    )
-    .lean();
+  const profile =
+    await SkinProfile.findOne({
+      userId,
+    })
+      .populate(
+        'avoidedIngredients',
+        'name aliases'
+      )
+      .lean();
 
   if (!profile) {
     throw new Error(
@@ -170,7 +207,7 @@ export const generateRecommendationsForUser = async (
   }
 
   /**
-   * 2. Build catalog query
+   * 2. BUILD PRODUCT QUERY
    */
   const query = {
     isActive: true,
@@ -185,83 +222,96 @@ export const generateRecommendationsForUser = async (
     profile.preferredProductCategories.length
   ) {
     query.category = {
-      $in: profile.preferredProductCategories,
+      $in:
+        profile.preferredProductCategories,
     };
   }
 
   /**
-   * 3. Load products with all structured intelligence
+   * 3. LOAD PRODUCTS
    */
-  const products = await Product.find(query)
-    .populate('brand')
-    .populate('category')
-    .populate('ingredients')
-    .populate('keyIngredients')
-    .lean();
+  const products =
+    await Product.find(query)
+      .populate('brand')
+      .populate('category')
+      .populate('ingredients')
+      .populate('keyIngredients')
+      .lean();
 
   if (!products.length) {
-    const emptyRecommendation =
-      await Recommendation.create({
-        user: userId,
-        profileSnapshot:
-          buildProfileSnapshot(profile),
-        products: [],
-        generatedBy: 'rule_engine',
-      });
+    return Recommendation.create({
+      user: userId,
 
-    return emptyRecommendation;
+      profileSnapshot:
+        buildProfileSnapshot(profile),
+
+      products: [],
+
+      generatedBy:
+        'rule_engine',
+    });
   }
 
   /**
-   * 4. Load active offers
-   */
-  const productIds = products.map(
-    (product) => product._id
-  );
-
-  const offers = await ProductOffer.find({
-    product: {
-      $in: productIds,
-    },
-    isActive: true,
-  })
-    .populate(
-      'retailer',
-      'name slug'
-    )
-    .lean();
-
-  /**
-   * 5. Group offers by product
-   */
-  const offersByProduct = offers.reduce(
-    (accumulator, offer) => {
-      const productId =
-        offer.product.toString();
-
-      if (!accumulator[productId]) {
-        accumulator[productId] = [];
-      }
-
-      accumulator[productId].push(offer);
-
-      return accumulator;
-    },
-    {}
-  );
-
-  /**
-   * 6. Deterministic scoring
+   * 4. LOAD ACTIVE OFFERS
    *
-   * IMPORTANT:
-   * No AI calls happen inside this loop.
+   * Offers are used only as input to
+   * budget evaluation.
+   *
+   * They are NOT saved into Recommendation.
    */
-  const scoredEntries = [];
+  const productIds =
+    products.map(
+      (product) => product._id
+    );
+
+  const offers =
+    await ProductOffer.find({
+      product: {
+        $in: productIds,
+      },
+
+      isActive: true,
+    })
+      .populate(
+        'retailer',
+        'name slug'
+      )
+      .lean();
+
+  /**
+   * 5. GROUP OFFERS BY PRODUCT
+   */
+  const offersByProduct =
+    offers.reduce(
+      (accumulator, offer) => {
+        const productId =
+          String(offer.product);
+
+        if (
+          !accumulator[productId]
+        ) {
+          accumulator[productId] = [];
+        }
+
+        accumulator[productId].push(
+          offer
+        );
+
+        return accumulator;
+      },
+      {}
+    );
+
+  /**
+   * 6. DETERMINISTIC MATCHING
+   */
+  const eligibleProducts = [];
 
   for (const product of products) {
     const productOffers =
       offersByProduct[
-        product._id.toString()
+        String(product._id)
       ] || [];
 
     const bestOffer =
@@ -269,51 +319,95 @@ export const generateRecommendationsForUser = async (
         productOffers
       );
 
-    const offerPrice = bestOffer
-      ? Number(bestOffer.price)
-      : null;
+    const offerPrice =
+      bestOffer
+        ? Number(bestOffer.price)
+        : null;
+
+    /**
+     * Canonical category comes from
+     * Product.category.
+     */
+    const recommendationCategory =
+      normalizeCategory(
+        product.category
+      );
+
+    /**
+     * Products without a canonical category
+     * cannot participate in category-local
+     * recommendations.
+     */
+    if (
+      !recommendationCategory
+    ) {
+      continue;
+    }
 
     const matchResult =
       computeProductMatch({
         product,
-        skinProfile: profile,
+
+        skinProfile:
+          profile,
+
         offerPrice,
+
         currentCategory:
           currentCategory ||
           product.category,
       });
 
     /**
-     * Hard conflicts are already converted
-     * into eligible=false by the matching engine.
+     * HARD CONSTRAINT FAILURE
      */
-    if (!matchResult.eligible) {
+    if (
+      !matchResult.eligible
+    ) {
       continue;
     }
 
-    scoredEntries.push({
+    /**
+     * UNKNOWN compatibility
+     *
+     * UNKNOWN is not a recommendation score.
+     */
+    if (
+      matchResult.overallScore ===
+      null ||
+      matchResult.overallScore ===
+      undefined
+    ) {
+      continue;
+    }
+
+    eligibleProducts.push({
       score:
-        Number(matchResult.overallScore) || 0,
+        Number(
+          matchResult.overallScore
+        ),
 
       skinCompatibilityScore:
-        Number(
-          matchResult.skinCompatibilityScore
-        ) || 0,
+        matchResult.skinCompatibilityScore,
 
       matchedFactors:
-        matchResult.matchedFactors || [],
+        matchResult.matchedFactors ||
+        [],
 
       concernsMatched:
-        matchResult.concernsMatched || [],
+        matchResult.concernsMatched ||
+        [],
 
       concernsNotMatched:
-        matchResult.concernsNotMatched || [],
+        matchResult.concernsNotMatched ||
+        [],
 
       explanation:
-        buildRecommendationExplanation({
-          product,
-          matchResult,
-        }),
+        matchResult.explanation ||
+        '',
+
+      confidence:
+        matchResult.confidence,
 
       matchResult,
 
@@ -322,181 +416,201 @@ export const generateRecommendationsForUser = async (
 
       product,
 
-      offerPrice,
-
-      offerUrl:
-        bestOffer?.url || null,
-
-      retailer:
-        bestOffer?.retailer || null,
+      recommendationCategory,
     });
   }
 
   /**
-   * 7. Deterministic ranking
+   * 7. GROUP BY CATEGORY
    */
-  scoredEntries.sort(
-    (a, b) => b.score - a.score
-  );
-
-  /**
-   * 8. Candidate pool
-   *
-   * We only ever expose a limited number of
-   * candidates to Gemini.
-   */
-  const candidateLimit = Math.min(
-    Math.max(
-      requestedLimit * 3,
-      Number(
-        process.env.GEMINI_CANDIDATE_LIMIT || 15
+  const productsByCategory =
+    new Map(
+      RECOMMENDATION_CATEGORIES.map(
+        (category) => [
+          category,
+          [],
+        ]
       )
-    ),
-    MAX_CANDIDATES
-  );
-
-  const topEntries =
-    scoredEntries.slice(
-      0,
-      candidateLimit
     );
 
+  eligibleProducts.forEach(
+    (entry) => {
+      const category =
+        entry.recommendationCategory;
+
+      const categoryProducts =
+        productsByCategory.get(
+          category
+        );
+
+      if (
+        categoryProducts
+      ) {
+        categoryProducts.push(
+          entry
+        );
+      }
+    }
+  );
+
   /**
-   * 9. Optional AI intervention
-   *
-   * This is the key optimization.
-   *
-   * Most recommendation requests:
-   *     0 AI calls
-   *
-   * Ambiguous/weak requests:
-   *     1 Gemini call
+   * 8. RANK EACH CATEGORY INDEPENDENTLY
    */
-  const useGemini = shouldUseGemini({
-    scoredEntries,
-    requestedLimit,
-  });
+  const categoryRecommendations =
+    [];
 
-  let rankedEntries = topEntries;
+  RECOMMENDATION_CATEGORIES.forEach(
+    (category) => {
+      const categoryProducts =
+        productsByCategory.get(
+          category
+        ) || [];
 
-  if (useGemini) {
-    rankedEntries =
-      await rankCatalogCandidates({
-        skinProfile: profile,
-        candidates: topEntries,
-      });
+      const rankedProducts =
+        sortCategoryProducts(
+          categoryProducts
+        );
 
-    /**
-     * Gemini may provide better concise reasons.
-     * Keep deterministic explanation if Gemini
-     * fails or doesn't return a usable reason.
-     */
-    rankedEntries =
-      rankedEntries.map((entry) => ({
-        ...entry,
+      rankedProducts
+        .slice(
+          0,
+          safeLimit
+        )
+        .forEach(
+          (
+            entry,
+            index
+          ) => {
+            categoryRecommendations.push({
+              product:
+                entry.product._id,
 
-        explanation:
-          typeof entry.explanation ===
-            'string' &&
-          entry.explanation.trim()
-            ? entry.explanation
-            : buildRecommendationExplanation({
-                product: entry.product,
-                matchResult:
-                  entry.matchResult,
-              }),
-      }));
-  }
+              /**
+               * Legacy rank.
+               *
+               * It now means category-local
+               * rank as well.
+               */
+              rank:
+                index + 1,
 
-  /**
-   * 10. Select final recommendations
-   */
-  const scoredProducts =
-    rankedEntries
-      .slice(0, requestedLimit)
-      .map((entry, index) => ({
-        product:
-          entry.product._id,
+              /**
+               * Canonical category-local rank.
+               */
+              categoryRank:
+                index + 1,
 
-        rank: index + 1,
+              /**
+               * Canonical category name.
+               */
+              recommendationCategory:
+                category,
 
-        compatibilityScore:
-          entry.score,
+              compatibilityScore:
+                entry.score,
 
-        matchedFactors:
-          entry.matchedFactors,
+              matchedFactors:
+                entry.matchedFactors,
 
-        concernsMatched:
-          entry.concernsMatched,
+              concernsMatched:
+                entry.concernsMatched,
 
-        concernsNotMatched:
-          entry.concernsNotMatched,
+              concernsNotMatched:
+                entry.concernsNotMatched,
 
-        explanation:
-          entry.explanation,
-
-        price:
-          entry.offerPrice,
-
-        retailer:
-          entry.retailer,
-
-        offerUrl:
-          entry.offerUrl,
-      }));
+              explanation:
+                entry.explanation,
+            });
+          }
+        );
+    }
+  );
 
   /**
-   * 11. Save recommendation snapshot
+   * 9. SAVE SNAPSHOT
+   *
+   * IMPORTANT:
+   *
+   * NO price
+   * NO retailer
+   * NO offerUrl
+   *
+   * Recommendation only stores recommendation
+   * intelligence.
    */
   const recommendation =
     await Recommendation.create({
       user: userId,
 
       profileSnapshot:
-        buildProfileSnapshot(profile),
+        buildProfileSnapshot(
+          profile
+        ),
 
       products:
-        scoredProducts,
+        categoryRecommendations,
 
       generatedBy:
-        useGemini
-          ? 'hybrid'
-          : 'rule_engine',
+        'rule_engine',
     });
 
   return recommendation;
 };
 
 /**
- * Get latest recommendations.
+ * Get latest VALID recommendation.
+ *
+ * We require:
+ * - at least one product
+ * - categoryRank
+ * - recommendationCategory
+ *
+ * This prevents an old legacy snapshot from
+ * replacing the new recommendation data.
  */
-export const getLatestRecommendationsForUser =
-  async (userId) => {
-    return Recommendation.find({
-      user: userId,
-    })
-      .sort({
-        createdAt: -1,
-      })
-      .limit(1)
-      .populate({
-        path: 'products.product',
-        populate: [
-          {
-            path: 'brand',
-          },
-          {
-            path: 'category',
-          },
-          {
-            path: 'ingredients',
-          },
-          {
-            path: 'keyIngredients',
-          },
-        ],
-      })
-      .lean();
-  };
+export const getLatestRecommendationsForUser = async (userId) => {
+  return Recommendation.find({
+    user: userId,
 
-export default generateRecommendationsForUser;
+    // Must contain at least one recommendation product
+    products: {
+      $elemMatch: {
+        // categoryRank must actually be a number, not null
+        categoryRank: {
+          $type: 'number',
+        },
+
+        // recommendationCategory must actually exist as a string
+        recommendationCategory: {
+          $type: 'string',
+        },
+      },
+    },
+  })
+    .sort({
+      createdAt: -1,
+    })
+    .limit(1)
+    .populate({
+      path: 'products.product',
+      populate: [
+        {
+          path: 'brand',
+        },
+        {
+          path: 'category',
+        },
+        {
+          path: 'ingredients',
+        },
+        {
+          path: 'keyIngredients',
+        },
+      ],
+    })
+    .lean();
+};
+
+
+export default
+  generateRecommendationsForUser;

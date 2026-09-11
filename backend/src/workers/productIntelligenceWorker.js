@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+
 import Product from '../models/Product.js';
 import ProductIntelligenceJob from '../models/ProductIntelligenceJob.js';
 
@@ -18,11 +20,6 @@ import {
 } from '../utils/productIntelligenceInput.js';
 
 import {
-  buildIngredientCoverage,
-  getKnowledgeForIngredients,
-} from '../services/ingredientKnowledgeService.js';
-
-import {
   isAutoResearchEnabled,
   queueUnknownsAndMaybeResearch,
 } from '../services/ingredientResearchService.js';
@@ -30,6 +27,12 @@ import {
 import {
   loadPopulatedProduct,
 } from '../services/productCatalogService.js';
+
+import {
+  INTELLIGENCE_VERSION,
+  PROMPT_VERSION,
+  KNOWLEDGE_BASE_VERSION,
+} from '../constants/intelligenceVersions.js';
 
 const markJobFailed = async (
   jobId,
@@ -57,6 +60,107 @@ const markJobFailed = async (
       },
     }
   );
+};
+
+/**
+ * Normalize a product's ingredient list into a stable
+ * canonical string suitable for hashing.
+ *
+ * This must be deterministic across runs so that the same
+ * formula always produces the same hash.
+ *
+ * Rules:
+ *   - trim each ingredient name
+ *   - collapse internal whitespace
+ *   - lowercase
+ *   - drop empty entries
+ *   - join with '|'
+ *
+ * Deliberately does NOT reorder ingredients, because order
+ * carries a weak concentration signal.
+ */
+const normalizeFormulaForHash = (
+  ingredients = []
+) =>
+  ingredients
+    .map((ingredient) =>
+      String(ingredient || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+    )
+    .filter(Boolean)
+    .join('|');
+
+const computeIntelligenceFormulaHash = (
+  ingredients = []
+) =>
+  crypto
+    .createHash('sha256')
+    .update(normalizeFormulaForHash(ingredients))
+    .digest('hex');
+
+/**
+ * Decide whether a product's stored intelligence can be
+ * reused as-is.
+ *
+ * All of the following must be true:
+ *   - product has a generated intelligence explanation
+ *   - product has a non-empty ingredientAnalysis array
+ *   - stored formula hash matches the current formula
+ *   - stored intelligenceVersion matches the current constant
+ *   - stored promptVersion matches the current constant
+ *   - stored knowledgeBaseVersion matches the current constant
+ *
+ * Any mismatch forces a fresh generation.
+ */
+const isValidIntelligenceCache = ({
+  product,
+  formulaHash,
+}) => {
+  const metadata = product.intelligenceMetadata;
+
+  if (!product.productIntelligence?.explanation) {
+    return false;
+  }
+
+  if (
+    !Array.isArray(
+      product.productIntelligence?.ingredientAnalysis
+    ) ||
+    product.productIntelligence.ingredientAnalysis.length === 0
+  ) {
+    return false;
+  }
+
+  if (
+    product.intelligenceFormulaHash !== formulaHash
+  ) {
+    return false;
+  }
+
+  if (
+    metadata?.intelligenceVersion !==
+    INTELLIGENCE_VERSION
+  ) {
+    return false;
+  }
+
+  if (
+    metadata?.promptVersion !==
+    PROMPT_VERSION
+  ) {
+    return false;
+  }
+
+  if (
+    metadata?.knowledgeBaseVersion !==
+    KNOWLEDGE_BASE_VERSION
+  ) {
+    return false;
+  }
+
+  return true;
 };
 
 export const processProductIntelligenceJob = async (
@@ -110,76 +214,76 @@ export const processProductIntelligenceJob = async (
     }
 
     /*
-     * Get current knowledge coverage.
+     * ----------------------------------------------------------
+     * FORMULA HASH + CACHE CHECK
+     * ----------------------------------------------------------
+     *
+     * If the formula is unchanged AND the stored intelligence
+     * was generated with the same intelligence / prompt / KB
+     * versions, skip the expensive generation path entirely.
      */
-    const knowledge =
-      await getKnowledgeForIngredients(
+    const formulaHash =
+      computeIntelligenceFormulaHash(
         intelligenceInput.ingredients
       );
 
-    const coverage =
-      await buildIngredientCoverage(
-        intelligenceInput.ingredients,
-        product._id
-      );
-
-    /*
-     * Find ingredients that are not currently
-     * production-eligible.
-     */
-    const unknownNames =
-      knowledge.unknown.map(
-        (entry) => entry.query
-      );
-
-    /*
-     * Research unknown ingredients in the
-     * background.
-     *
-     * This does NOT block Product Intelligence.
-     *
-     * Successful research will automatically
-     * synchronize into IngredientKnowledge.
-     */
     if (
-      isAutoResearchEnabled() &&
-      unknownNames.length
+      isValidIntelligenceCache({
+        product,
+        formulaHash,
+      })
     ) {
-      queueUnknownsAndMaybeResearch(
-        unknownNames,
+      console.info(
+        '[intelligence] cache hit',
         {
-          productId: product._id,
-          productContext:
-            `${intelligenceInput.name} by ${intelligenceInput.brand}`,
+          productId: String(product._id),
+          formulaHash,
         }
-      ).catch((error) => {
-        console.error(
-          '[intelligence] background ingredient research failed',
-          error.message
-        );
-      });
+      );
+
+      await ProductIntelligenceJob.findByIdAndUpdate(
+        jobId,
+        {
+          $set: {
+            status: 'completed',
+            completedAt: new Date(),
+            error: null,
+          },
+        }
+      );
+
+      return {
+        jobId,
+        status: 'completed',
+        cached: true,
+        coverage: null,
+      };
     }
 
     /*
-     * Generate product intelligence using the
-     * knowledge that exists RIGHT NOW.
+     * ----------------------------------------------------------
+     * GENERATE PRODUCT INTELLIGENCE
+     * ----------------------------------------------------------
      *
-     * Newly researched ingredients will become
-     * available to future intelligence runs.
+     * The service performs its own knowledge resolution:
+     *
+     *   COMPLETE INCI
+     *     ↓
+     *   EXACT KB  (canonical)
+     *     ↓
+     *   VECTOR FALLBACK  (unmatched ingredients only)
+     *     ↓
+     *   UNKNOWN → research queue
+     *     ↓
+     *   CEREBRAS
+     *
+     * The worker must NOT duplicate that lookup. Doing so was
+     * wasteful and could cause divergent decisions between the
+     * worker and the service.
      */
     const intelligenceResult =
       await generateProductIntelligence({
         ...intelligenceInput,
-
-        verifiedKnowledge:
-          knowledge.known.map(
-            (entry) => entry.record
-          ),
-
-        unknownIngredients:
-          knowledge.unknown.map(
-            (entry) => entry.query
-          ),
       });
 
     if (!intelligenceResult.success) {
@@ -189,6 +293,11 @@ export const processProductIntelligenceJob = async (
       );
     }
 
+    /*
+     * ----------------------------------------------------------
+     * QUALITY SCORE
+     * ----------------------------------------------------------
+     */
     const qualityResult =
       computeProductQualityScore({
         productIntelligence:
@@ -198,8 +307,16 @@ export const processProductIntelligenceJob = async (
           intelligenceInput,
       });
 
+    /*
+     * ----------------------------------------------------------
+     * PERSIST
+     * ----------------------------------------------------------
+     */
     product.productIntelligence =
       intelligenceResult.data;
+
+    product.intelligenceFormulaHash =
+      formulaHash;
 
     product.qualityScore =
       qualityResult.score;
@@ -246,9 +363,64 @@ export const processProductIntelligenceJob = async (
 
     await product.save();
 
+    /*
+     * ----------------------------------------------------------
+     * INVALIDATE DEPENDENT EXPLANATIONS
+     * ----------------------------------------------------------
+     */
     await invalidateExplanationsForIntelligenceChange(
       product._id
     );
+
+    /*
+     * ----------------------------------------------------------
+     * BACKGROUND INGREDIENT RESEARCH
+     * ----------------------------------------------------------
+     *
+     * The service already queued unresolved ingredients during
+     * its knowledge resolution step (via
+     * recordUnknownIngredients). This call adds the actual
+     * research trigger if auto-research is enabled.
+     *
+     * Failures are non-fatal: intelligence has already been
+     * persisted above.
+     */
+    if (isAutoResearchEnabled()) {
+      const unknownIngredients =
+        Array.isArray(
+          intelligenceResult.metadata
+            ?.unknownIngredients
+        )
+          ? intelligenceResult.metadata
+              .unknownIngredients
+          : [];
+
+      if (unknownIngredients.length) {
+        queueUnknownsAndMaybeResearch(
+          unknownIngredients,
+          {
+            productId: product._id,
+
+            productContext:
+              `${intelligenceInput.name} by ${intelligenceInput.brand}`,
+
+            category:
+              String(
+                intelligenceInput.category ||
+                'general'
+              )
+                .trim()
+                .toLowerCase() ||
+              'general',
+          }
+        ).catch((error) => {
+          console.error(
+            '[intelligence] background ingredient research failed',
+            error.message
+          );
+        });
+      }
+    }
 
     await ProductIntelligenceJob.findByIdAndUpdate(
       jobId,
@@ -264,7 +436,8 @@ export const processProductIntelligenceJob = async (
     return {
       jobId,
       status: 'completed',
-      coverage,
+      cached: false,
+      coverage: null,
     };
   } catch (error) {
     await markJobFailed(

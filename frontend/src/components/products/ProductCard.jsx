@@ -87,6 +87,58 @@ export function getMarketplacePrices(product) {
     .sort((a, b) => a.price - b.price);
 }
 
+/**
+ * Get retailer price offers for a product from real ProductOffer
+ * records (product.offers — populated by the page-level batch offer
+ * fetch, using the same offer shape ProductDetailPage already
+ * consumes: offer.retailer?.name, offer.price, offer.url /
+ * offer.affiliateUrl, offer.inStock, offer.isActive).
+ *
+ * Falls back to getMarketplacePrices() for any legacy inline price
+ * fields already on the product, so nothing regresses for products
+ * whose offers haven't loaded/been wired up yet.
+ *
+ * Never fabricates a price, retailer, or discount. Inactive or
+ * out-of-stock offers are excluded when that information is present.
+ *
+ * Returns: [{ name, price, url }], sorted cheapest first.
+ */
+export function getRetailerOffers(product) {
+  const rawOffers = Array.isArray(product?.offers) ? product.offers : null;
+
+  if (!rawOffers || rawOffers.length === 0) {
+    return getMarketplacePrices(product);
+  }
+
+  const seen = new Set();
+
+  return rawOffers
+    .filter(
+      (offer) =>
+        offer &&
+        offer.isActive !== false &&
+        offer.inStock !== false
+    )
+    .map((offer) => {
+      const name = offer?.retailer?.name ?? offer?.retailerName ?? null;
+      const price = Number(offer?.price);
+
+      if (!name || !Number.isFinite(price) || price <= 0) return null;
+
+      const url = offer?.url ?? offer?.affiliateUrl ?? null;
+
+      return { name: String(name), price, url };
+    })
+    .filter((offer) => {
+      if (!offer) return false;
+      const key = offer.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.price - b.price);
+}
+
 export function formatINR(amount) {
   return `₹${Math.round(amount).toLocaleString('en-IN')}`;
 }
@@ -251,10 +303,13 @@ function formatMarketplaceName(name) {
 export default function ProductCard({
   product,
   index = 0,
+  isRecommended = false,
+  offersLoading = false,
 }) {
   const navigate = useNavigate();
 
   const [showWhy, setShowWhy] = useState(false);
+  const [showAllPrices, setShowAllPrices] = useState(false);
 
   if (!product) return null;
 
@@ -279,24 +334,44 @@ export default function ProductCard({
   const rating = getProductRating(product);
 
   const marketplacePrices =
-    getMarketplacePrices(product);
+    getRetailerOffers(product);
 
   const recommendationReasons =
     getRecommendationReasons(product);
 
   /*
-   * Keep the price overlay compact.
+   * Recommendation metadata is produced by the backend
+   * matching engine.
    *
-   * The prices are already sorted cheapest -> highest
-   * by getMarketplacePrices().
+   * The frontend only displays it.
+   *
+   * It does NOT calculate rank or compatibility.
    */
-  const visiblePrices =
-    marketplacePrices.slice(0, 3);
+  const recommendation =
+    product?.recommendation ?? null;
 
-  const cheapestPrice =
-    visiblePrices.length > 0
-      ? visiblePrices[0]
+  const categoryRank =
+    recommendation?.categoryRank ?? null;
+
+  const recommendationCategory =
+    recommendation?.recommendationCategory ?? null;
+
+  const compatibilityScoreRaw =
+    recommendation?.compatibilityScore ?? null;
+
+  const compatibilityScore =
+    Number.isFinite(Number(compatibilityScoreRaw))
+      ? Number(compatibilityScoreRaw)
       : null;
+
+  /*
+   * Prices now render below the product name (not as an image
+   * overlay). Show the 2 cheapest by default; anything beyond that
+   * lives behind a "+N more" dropdown so the card doesn't grow
+   * unbounded when a product has many retailer offers.
+   */
+  const primaryPrices = marketplacePrices.slice(0, 2);
+  const extraPrices = marketplacePrices.slice(2);
 
   const handleOpen = () => {
     if (!_id) return;
@@ -320,6 +395,112 @@ export default function ProductCard({
     if (recommendationReasons.length > 0) {
       setShowWhy((current) => !current);
     }
+  };
+
+  const handleTogglePrices = (event) => {
+    event.stopPropagation();
+
+    if (extraPrices.length > 0) {
+      setShowAllPrices((current) => !current);
+    }
+  };
+
+  /**
+   * Renders one retailer price row. Shared between the always-visible
+   * rows and the ones revealed by the "+N more" dropdown, so both
+   * look identical and stay in sync.
+   */
+  const renderPriceRow = (marketplace, isCheapest) => {
+    const rowContent = (
+      <>
+        <span
+          className={`
+            min-w-0
+            flex-1
+            truncate
+            text-[10px]
+            ${
+              isCheapest
+                ? 'font-semibold text-[#171312]'
+                : 'font-medium text-black/55'
+            }
+          `}
+        >
+          {formatMarketplaceName(marketplace.name)}
+        </span>
+
+        <span
+          className={`
+            shrink-0
+            text-[10px]
+            ${
+              isCheapest
+                ? 'font-bold text-[#171312]'
+                : 'font-medium text-black/65'
+            }
+          `}
+        >
+          {formatINR(marketplace.price)}
+        </span>
+
+        {isCheapest && (
+          <span
+            className="
+              shrink-0
+              rounded-full
+              bg-[#171312]
+              px-1.5
+              py-0.5
+              text-[6px]
+              font-bold
+              uppercase
+              tracking-wide
+              text-white
+            "
+          >
+            Best
+          </span>
+        )}
+      </>
+    );
+
+    const rowClassName = `
+      flex
+      items-center
+      gap-2
+      rounded-md
+      px-1
+      py-0.5
+      transition-colors
+      hover:bg-black/[0.04]
+    `;
+
+    if (marketplace.url) {
+      return (
+        <a
+          key={`${marketplace.name}-${marketplace.price}`}
+          href={marketplace.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+          className={rowClassName}
+          aria-label={`${marketplace.name} ${formatINR(marketplace.price)}`}
+        >
+          {rowContent}
+        </a>
+      );
+    }
+
+    return (
+      <div
+        key={`${marketplace.name}-${marketplace.price}`}
+        className={rowClassName}
+      >
+        {rowContent}
+      </div>
+    );
   };
 
   return (
@@ -396,7 +577,86 @@ export default function ProductCard({
         </motion.div>
 
         {/* =======================================================
-            RATING — TOP RIGHT
+            RECOMMENDATION MATCH BADGE — TOP LEFT
+
+            Rank comes directly from the backend.
+            No frontend ranking calculation.
+            ======================================================= */}
+        {isRecommended && categoryRank != null && (
+          <motion.div
+            initial={{
+              opacity: 0,
+              x: -8,
+              scale: 0.95,
+            }}
+            animate={{
+              opacity: 1,
+              x: 0,
+              scale: 1,
+            }}
+            transition={{
+              duration: 0.3,
+              delay: 0.08,
+            }}
+            className="
+              absolute
+              left-3
+              top-3
+              z-20
+              max-w-[150px]
+              rounded-xl
+              bg-[#ff3d77]
+              px-3
+              py-2
+              text-[#171312]
+              shadow-[0_4px_14px_rgba(255,61,119,0.45)]
+            "
+            title={
+              recommendationCategory
+                ? `Ranked #${categoryRank} match in ${recommendationCategory}`
+                : `Ranked #${categoryRank} match`
+            }
+          >
+            <div className="
+              flex
+              items-center
+              gap-1.5
+            ">
+              <span className="
+                text-[13px]
+                leading-none
+                text-[#171312]
+              ">
+                ✦
+              </span>
+
+              <span className="
+                text-[11px]
+                font-extrabold
+                uppercase
+                leading-none
+                tracking-tight
+                text-[#171312]
+              ">
+                #{categoryRank} Match
+              </span>
+            </div>
+
+            {compatibilityScore != null && (
+              <div className="
+                mt-1
+                text-[8px]
+                font-bold
+                text-[#171312]/70
+              ">
+                {Math.round(compatibilityScore)}% compatibility
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* =======================================================
+            RATING — BOTTOM CORNER OF IMAGE
             ======================================================= */}
         {rating != null && (
           <motion.div
@@ -414,8 +674,8 @@ export default function ProductCard({
             }}
             className="
               absolute
+              bottom-3
               right-3
-              top-3
               z-20
               flex
               items-center
@@ -441,191 +701,6 @@ export default function ProductCard({
             </span>
           </motion.div>
         )}
-
-        {/* =======================================================
-            MARKETPLACE PRICES — LOWER RIGHT OF IMAGE
-
-            Example:
-
-            Amazon     ₹799
-            Flipkart   ₹849
-            Nykaa      ₹899
-
-            Cheapest is emphasized.
-            ======================================================= */}
-        {visiblePrices.length > 0 && (
-          <motion.div
-            initial={{
-              opacity: 0,
-              x: 8,
-            }}
-            animate={{
-              opacity: 1,
-              x: 0,
-            }}
-            transition={{
-              duration: 0.3,
-              delay: 0.1,
-            }}
-            className="
-              absolute
-              bottom-3
-              right-3
-              z-20
-              min-w-[108px]
-              max-w-[145px]
-              rounded-xl
-              bg-white/95
-              px-2.5
-              py-2
-              shadow-[0_4px_16px_rgba(0,0,0,0.13)]
-              backdrop-blur-md
-            "
-          >
-            <div className="
-              mb-1.5
-              text-[7px]
-              font-bold
-              uppercase
-              tracking-[0.12em]
-              text-black/35
-            ">
-              Prices
-            </div>
-
-            <div className="space-y-1">
-              {visiblePrices.map(
-                (marketplace, priceIndex) => {
-                  const isCheapest =
-                    priceIndex === 0;
-
-                  const content = (
-                    <>
-                      <span
-                        className={`
-                          min-w-0
-                          flex-1
-                          truncate
-                          text-[9px]
-                          ${
-                            isCheapest
-                              ? 'font-semibold text-[#171312]'
-                              : 'font-medium text-black/50'
-                          }
-                        `}
-                      >
-                        {formatMarketplaceName(
-                          marketplace.name
-                        )}
-                      </span>
-
-                      <span
-                        className={`
-                          shrink-0
-                          text-[9px]
-                          ${
-                            isCheapest
-                              ? 'font-bold text-[#171312]'
-                              : 'font-medium text-black/60'
-                          }
-                        `}
-                      >
-                        {formatINR(
-                          marketplace.price
-                        )}
-                      </span>
-                    </>
-                  );
-
-                  if (marketplace.url) {
-                    return (
-                      <a
-                        key={`${marketplace.name}-${marketplace.price}`}
-                        href={marketplace.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                        }}
-                        className="
-                          flex
-                          items-center
-                          gap-2
-                          rounded-md
-                          px-1
-                          py-0.5
-                          transition-colors
-                          hover:bg-black/[0.04]
-                        "
-                        aria-label={`${marketplace.name} ${formatINR(
-                          marketplace.price
-                        )}`}
-                      >
-                        {content}
-
-                        {isCheapest && (
-                          <span className="
-                            shrink-0
-                            rounded-full
-                            bg-[#171312]
-                            px-1.5
-                            py-0.5
-                            text-[6px]
-                            font-bold
-                            uppercase
-                            tracking-wide
-                            text-white
-                          ">
-                            Best
-                          </span>
-                        )}
-                      </a>
-                    );
-                  }
-
-                  return (
-                    <div
-                      key={`${marketplace.name}-${marketplace.price}`}
-                      className="
-                        flex
-                        items-center
-                        gap-2
-                        px-1
-                        py-0.5
-                      "
-                    >
-                      {content}
-
-                      {isCheapest && (
-                        <span className="
-                          shrink-0
-                          rounded-full
-                          bg-[#171312]
-                          px-1.5
-                          py-0.5
-                          text-[6px]
-                          font-bold
-                          uppercase
-                          tracking-wide
-                          text-white
-                        ">
-                          Best
-                        </span>
-                      )}
-                    </div>
-                  );
-                }
-              )}
-            </div>
-          </motion.div>
-        )}
-
-        {/* =======================================================
-            NO PRICE DATA
-
-            Intentionally nothing is shown.
-            We do NOT invent prices.
-            ======================================================= */}
       </div>
 
       {/* =========================================================
@@ -667,6 +742,108 @@ export default function ProductCard({
             text-black/35
           ">
             {categoryName}
+          </div>
+        )}
+
+        {/* =======================================================
+            RETAILER PRICES — BELOW NAME
+
+            2 cheapest shown by default; anything beyond that sits
+            behind a "+N more" dropdown. Cheapest is marked Best.
+            Never fabricates a price - if offers haven't loaded yet,
+            show an unobtrusive loading note instead.
+            ======================================================= */}
+        {marketplacePrices.length === 0 && offersLoading && (
+          <div className="
+            mt-2
+            text-[9px]
+            font-medium
+            text-black/35
+          ">
+            Loading prices…
+          </div>
+        )}
+
+        {marketplacePrices.length > 0 && (
+          <div className="mt-2">
+            <div className="space-y-0.5">
+              {primaryPrices.map((marketplace, priceIndex) =>
+                renderPriceRow(marketplace, priceIndex === 0)
+              )}
+            </div>
+
+            {extraPrices.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleTogglePrices}
+                  aria-expanded={showAllPrices}
+                  className="
+                    mt-0.5
+                    flex
+                    items-center
+                    gap-1
+                    px-1
+                    py-0.5
+                    text-[9px]
+                    font-semibold
+                    text-black/40
+                    transition-colors
+                    hover:text-black/60
+                  "
+                >
+                  <span>
+                    {showAllPrices
+                      ? 'Show less'
+                      : `+${extraPrices.length} more price${
+                          extraPrices.length > 1 ? 's' : ''
+                        }`}
+                  </span>
+
+                  <motion.span
+                    animate={{
+                      rotate: showAllPrices ? 180 : 0,
+                    }}
+                    transition={{
+                      duration: 0.2,
+                    }}
+                    className="text-[8px]"
+                  >
+                    ▾
+                  </motion.span>
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {showAllPrices && (
+                    <motion.div
+                      initial={{
+                        height: 0,
+                        opacity: 0,
+                      }}
+                      animate={{
+                        height: 'auto',
+                        opacity: 1,
+                      }}
+                      exit={{
+                        height: 0,
+                        opacity: 0,
+                      }}
+                      transition={{
+                        duration: 0.2,
+                        ease: [0.22, 1, 0.36, 1],
+                      }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-0.5">
+                        {extraPrices.map((marketplace) =>
+                          renderPriceRow(marketplace, false)
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </>
+            )}
           </div>
         )}
 

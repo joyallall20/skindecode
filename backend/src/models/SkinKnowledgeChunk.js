@@ -38,6 +38,16 @@ const skinKnowledgeChunkSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Knowledge domain/category.
+    // Examples: sunscreen, moisturizer, toner, general.
+    category: {
+      type: String,
+      default: 'general',
+      trim: true,
+      lowercase: true,
+      index: true,
+    },
+
     // ============================================================
     // CHUNK CLASSIFICATION
     // ============================================================
@@ -273,6 +283,14 @@ const skinKnowledgeChunkSchema = new mongoose.Schema(
 skinKnowledgeChunkSchema.index({
   ingredientKey: 1,
   isActive: 1,
+});
+
+// Retrieve category-scoped knowledge for a specific ingredient.
+// Example: sunscreen + specific ingredient + active only.
+skinKnowledgeChunkSchema.index({
+  category: 1,
+  isActive: 1,
+  ingredientKey: 1,
 });
 
 // Useful for exact/filtered retrieval.

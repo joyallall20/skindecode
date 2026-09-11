@@ -1,3 +1,6 @@
+
+import normalizeCategory from '../utils/normalizeCategory.js'
+
 export const normalizeNumber = (value, fallback = 0) => {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) ? numericValue : fallback;
@@ -1844,25 +1847,29 @@ export const scoreProductCompatibility = ({
    * -------------------------------------------------------
    */
 
-  if (
-    currentCategory &&
-    product.category &&
-    currentCategory.toString() ===
-      product.category.toString()
-  ) {
-    score += 4;
+  const normalizedCurrentCategory =
+  normalizeCategory(currentCategory);
 
-    matchedFactors.push(
-      'Matches your current product category'
-    );
-  } else if (currentCategory) {
-    score -= 3;
+const normalizedProductCategory =
+  normalizeCategory(product.category);
 
-    concernsNotMatched.push(
-      'category match'
-    );
-  }
+if (
+  normalizedCurrentCategory &&
+  normalizedProductCategory &&
+  normalizedCurrentCategory === normalizedProductCategory
+) {
+  score += 4;
 
+  matchedFactors.push(
+    'Matches your current product category'
+  );
+} else if (normalizedCurrentCategory) {
+  score -= 3;
+
+  concernsNotMatched.push(
+    'category match'
+  );
+}
   /*
    * -------------------------------------------------------
    * 16. BUDGET

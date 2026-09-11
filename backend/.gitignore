@@ -3,3 +3,4 @@
 !.env.example
 node_modules
 npm-debug.log*
+Add-Content .gitignore "`n# Hugging Face downloaded models`nembedding-service/models/huggingface/"

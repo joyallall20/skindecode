@@ -26,7 +26,11 @@ export const DEFAULT_KNOWLEDGE_JSON_PATH = path.resolve(
 );
 
 export const isProductionEligibleKnowledge = (record) =>
-  Boolean(record && PRODUCTION_RESEARCH_STATUSES.has(record.researchStatus) && record.isActive !== false);
+  Boolean(
+    record &&
+      PRODUCTION_RESEARCH_STATUSES.has(record.researchStatus) &&
+      record.isActive !== false
+  );
 
 export const getVerifiedKnowledgeForIngredients = async (ingredientIds = []) => {
   if (!ingredientIds.length) return [];
@@ -53,7 +57,9 @@ export const formatVerifiedKnowledgeContext = (records = []) => {
   return unique.map((record) => formatKnowledgeForPrompt(record)).join('\n\n');
 };
 
-export const loadKnowledgeSeedFile = async (filePath = DEFAULT_KNOWLEDGE_JSON_PATH) => {
+export const loadKnowledgeSeedFile = async (
+  filePath = DEFAULT_KNOWLEDGE_JSON_PATH
+) => {
   const raw = await fs.readFile(filePath, 'utf8');
   const payload = JSON.parse(raw);
   const validated = validateKnowledgeSeedFile(payload);
@@ -71,7 +77,9 @@ export const importIngredientKnowledgeFromJson = async ({
 } = {}) => {
   const validated = await loadKnowledgeSeedFile(filePath);
   if (!validated.valid) {
-    const error = new Error(`Knowledge base JSON is invalid: ${validated.errors.join('; ')}`);
+    const error = new Error(
+      `Knowledge base JSON is invalid: ${validated.errors.join('; ')}`
+    );
     error.details = validated.errors;
     throw error;
   }
@@ -81,7 +89,9 @@ export const importIngredientKnowledgeFromJson = async ({
   let updated = 0;
 
   for (const ingredient of validated.ingredients) {
-    const existing = await IngredientKnowledge.findOne({ ingredientKey: ingredient.ingredientKey });
+    const existing = await IngredientKnowledge.findOne({
+      ingredientKey: ingredient.ingredientKey,
+    });
     if (existing && !overwrite) {
       skipped += 1;
       continue;
@@ -91,7 +101,8 @@ export const importIngredientKnowledgeFromJson = async ({
       ...ingredient,
       origin: 'seed',
       researchStatus: ingredient.researchStatus || 'verified',
-      knowledgeBaseVersion: validated.meta.schemaVersion || KNOWLEDGE_BASE_VERSION,
+      knowledgeBaseVersion:
+        validated.meta.schemaVersion || KNOWLEDGE_BASE_VERSION,
       isActive: true,
     };
 
@@ -105,7 +116,12 @@ export const importIngredientKnowledgeFromJson = async ({
     }
   }
 
-  console.info('[knowledge] import completed', { inserted, skipped, updated, total: validated.ingredients.length });
+  console.info('[knowledge] import completed', {
+    inserted,
+    skipped,
+    updated,
+    total: validated.ingredients.length,
+  });
   return {
     inserted,
     skipped,
@@ -117,9 +133,13 @@ export const importIngredientKnowledgeFromJson = async ({
 };
 
 export const seedIngredientKnowledgeIfEmpty = async () => {
-  const count = await IngredientKnowledge.countDocuments({ ingredientKey: { $exists: true, $ne: '' } });
+  const count = await IngredientKnowledge.countDocuments({
+    ingredientKey: { $exists: true, $ne: '' },
+  });
   if (count > 0) {
-    console.info('[knowledge] seed skipped; MongoDB already has records', { count });
+    console.info('[knowledge] seed skipped; MongoDB already has records', {
+      count,
+    });
     return { seeded: false, count };
   }
   const result = await importIngredientKnowledgeFromJson();
@@ -141,19 +161,24 @@ export const getAllIngredients = async ({ status, search, limit = 100 } = {}) =>
       { normalizedSynonyms: token },
     ];
   }
-  return IngredientKnowledge.find(query).sort({ name: 1 }).limit(Number(limit)).lean();
+  return IngredientKnowledge.find(query)
+    .sort({ name: 1 })
+    .limit(Number(limit))
+    .lean();
 };
 
 export const getIngredientByKey = (ingredientKey) =>
   IngredientKnowledge.findOne({ ingredientKey }).lean();
 
 export const getIngredientByINCI = (inciName) =>
-  IngredientKnowledge.findOne({ normalizedInciName: normalizeIngredientToken(inciName) }).lean();
+  IngredientKnowledge.findOne({
+    normalizedInciName: normalizeIngredientToken(inciName),
+  }).lean();
 
 export const getIngredientByCAS = (cas) =>
   IngredientKnowledge.findOne({ normalizedCas: normalizeCas(cas) }).lean();
 
-export const findIngredient = async (query) => {
+export const findIngredient = async (query, { category = 'general' } = {}) => {
   const raw = String(query || '').trim();
   if (!raw) return null;
 
@@ -168,38 +193,74 @@ export const findIngredient = async (query) => {
       { normalizedInciName: token },
       { normalizedSynonyms: token },
     ];
+
     if (cas && /\d+-\d+-\d+/.test(cas)) {
       conditions.push({ normalizedCas: cas });
     }
+
     return conditions;
   };
 
-  // Prefer production-eligible records (verified + active).
-  const verified = await IngredientKnowledge.findOne({
+  const baseFilter = {
     $or: buildOrConditions(),
+  };
+
+  /*
+   * IMPORTANT:
+   * IngredientKnowledge is the canonical ingredient identity layer.
+   * Do NOT require category here.
+   *
+   * Category-specific filtering belongs to SkinKnowledgeChunk / RAG.
+   */
+
+  // Prefer production-eligible records.
+  const verified = await IngredientKnowledge.findOne({
+    ...baseFilter,
     researchStatus: 'verified',
     isActive: { $ne: false },
   }).lean();
 
   if (verified) return verified;
 
-  // Fall back to any matching record so callers can classify it as unknown/unverified.
-  return IngredientKnowledge.findOne({
-    $or: buildOrConditions(),
-  }).lean();
+  // Return an existing unverified record so callers can classify it.
+  return IngredientKnowledge.findOne(baseFilter).lean();
 };
 
-export const findIngredients = async (queries = []) => {
-  const unique = [...new Set((queries || []).map((entry) => String(entry || '').trim()).filter(Boolean))];
+export const findIngredients = async (
+  queries = [],
+  { category = 'general' } = {}
+) => {
+  const unique = [
+    ...new Set(
+      (queries || [])
+        .map((entry) => String(entry || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+
   const results = [];
+
   for (const query of unique) {
-    results.push({ query, record: await findIngredient(query) });
+    results.push({
+      query,
+      record: await findIngredient(query, { category }),
+    });
   }
+
   return results;
 };
 
-export const getKnowledgeForIngredients = async (names = []) => {
-  const lookups = await findIngredients(names);
+export const getKnowledgeForIngredients = async (
+  names = [],
+  { category = 'general' } = {}
+) => {
+  const normalizedCategory =
+    String(category || 'general').trim().toLowerCase() || 'general';
+
+  const lookups = await findIngredients(names, {
+    category: normalizedCategory,
+  });
+
   const known = [];
   const unknown = [];
 
@@ -232,20 +293,44 @@ export const getKnowledgeForIngredients = async (names = []) => {
   };
 };
 
-export const recordUnknownIngredients = async (names = [], productId = null) => {
+export const recordUnknownIngredients = async (
+  names = [],
+  productId = null,
+  category = 'general'
+) => {
   const created = [];
+
+  const normalizedCategory =
+    String(category || 'general').trim().toLowerCase() || 'general';
+
   for (const name of names) {
     const normalizedName = normalizeIngredientToken(name);
+
     if (!normalizedName) continue;
+
     const existing = await IngredientResearch.findOne({
       normalizedName,
-      status: { $in: ['research_needed', 'researching', 'pending_review', 'failed'] },
+      category: normalizedCategory,
+      status: {
+        $in: [
+          'research_needed',
+          'researching',
+          'pending_review',
+          'failed',
+        ],
+      },
     });
+
     if (existing) {
       existing.lastDetectedAt = new Date();
-      if (productId && !existing.productIds.some((id) => String(id) === String(productId))) {
+
+      if (
+        productId &&
+        !existing.productIds.some((id) => String(id) === String(productId))
+      ) {
         existing.productIds.push(productId);
       }
+
       await existing.save();
       created.push(existing);
       continue;
@@ -254,43 +339,67 @@ export const recordUnknownIngredients = async (names = [], productId = null) => 
     const queued = await IngredientResearch.create({
       ingredientName: String(name).trim(),
       normalizedName,
+      category: normalizedCategory,
       status: 'research_needed',
       productIds: productId ? [productId] : [],
       firstDetectedAt: new Date(),
       lastDetectedAt: new Date(),
     });
-    console.info('[knowledge] unknown ingredient queued', { name, normalizedName, productId });
+
+    console.info('[knowledge] unknown ingredient queued', {
+      name,
+      normalizedName,
+      category: normalizedCategory,
+      productId,
+    });
+
     created.push(queued);
   }
+
   return created;
 };
 
 export const buildIngredientCoverage = async (
   ingredientNames = [],
   productId = null,
-  { recordUnknown = false } = {}
+  { recordUnknown = false, category = 'general' } = {}
 ) => {
-  const coverage = await getKnowledgeForIngredients(ingredientNames);
+  const normalizedCategory =
+    String(category || 'general').trim().toLowerCase() || 'general';
+
+  const coverage = await getKnowledgeForIngredients(ingredientNames, {
+    category: normalizedCategory,
+  });
+
   if (recordUnknown && coverage.unknown.length && productId) {
-    await recordUnknownIngredients(coverage.unknown.map((entry) => entry.query), productId);
+    await recordUnknownIngredients(
+      coverage.unknown.map((entry) => entry.query),
+      productId,
+      normalizedCategory
+    );
   }
+
   return {
     total: coverage.total,
     matched: coverage.matched,
     unmatched: coverage.unmatched,
+
     known: coverage.known.map(({ query, record }) => ({
       query,
       ingredientKey: record.ingredientKey,
       name: record.name,
       inciName: record.inciName,
+      category: record.category || 'general',
       researchStatus: record.researchStatus,
       evidenceLevel: record.evidenceLevel,
       generalFlag: record.generalFlag,
       matched: true,
     })),
+
     unknown: coverage.unknown.map((entry) => ({
       query: entry.query,
       normalizedName: entry.normalizedName,
+      category: normalizedCategory,
       researchStatus: entry.record?.researchStatus || 'research_needed',
       evidenceLevel: null,
       generalFlag: null,

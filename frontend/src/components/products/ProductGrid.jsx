@@ -43,6 +43,8 @@ function EmptyState({ hasFilters, title, subtitle }) {
  */
 export default function ProductGrid({
   products = [],
+  recommendedProductIds = [],
+  offersLoading = false,
   isLoading = false,
   hasFilters = false,
   emptyTitle,
@@ -62,10 +64,23 @@ export default function ProductGrid({
     return <EmptyState hasFilters={hasFilters} title={emptyTitle} subtitle={emptySubtitle} />;
   }
 
+  // Defensive: IDs may arrive as ObjectId instances, plain strings, or be
+  // absent entirely depending on the caller. Normalize to strings so the
+  // lookup below is never fooled by a type mismatch.
+  const recommendedIds = new Set(
+    (recommendedProductIds || []).map((id) => String(id)),
+  );
+
   return (
     <div className="pgrid">
       {products.map((product, index) => (
-        <ProductCard key={product._id} product={product} index={index} />
+        <ProductCard
+          key={product._id}
+          product={product}
+          index={index}
+          isRecommended={recommendedIds.has(String(product._id))}
+          offersLoading={offersLoading}
+        />
       ))}
     </div>
   );

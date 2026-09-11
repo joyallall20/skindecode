@@ -162,7 +162,15 @@ const productSchema = new mongoose.Schema(
 
     intelligenceStatus: {
       type: String,
-      enum: ["none", "queued", "generating", "generated", "approved", "rejected", "failed"],
+      enum: [
+        "none",
+        "queued",
+        "generating",
+        "generated",
+        "approved",
+        "rejected",
+        "failed",
+      ],
       default: "none",
       index: true,
     },
@@ -195,59 +203,78 @@ const productSchema = new mongoose.Schema(
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+
       sensitivitySuitability: {
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+
       concernCompatibility: {
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+
       ingredientAnalysis: {
-        type: [{
-          ingredient: String,
-          benefits: [String],
-          relevantConcerns: [String],
-          potentialSensitivityConcern: String,
-          explanation: String,
-          evidenceLevel: {
-            type: String,
-            enum: ['known', 'likely', 'evidence-backed', 'unknown'],
-            default: 'unknown',
+        type: [
+          {
+            ingredient: String,
+            benefits: [String],
+            relevantConcerns: [String],
+            potentialSensitivityConcern: String,
+            explanation: String,
+
+            evidenceLevel: {
+              type: String,
+              enum: [
+                "known",
+                "likely",
+                "evidence-backed",
+                "unknown",
+              ],
+              default: "unknown",
+            },
           },
-        }],
+        ],
         default: [],
       },
+
       ingredientConflicts: {
         type: [String],
         default: [],
       },
+
       avoidanceSignals: {
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+
       mustHaveAttributes: {
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+
       hydrationProfile: {
         type: String,
         default: null,
       },
+
       oilControlProfile: {
         type: String,
         default: null,
       },
+
       qualityAssessment: {
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+
       evidenceConfidence: {
         type: Number,
         min: 0,
         max: 1,
         default: null,
       },
+
       explanation: {
         type: String,
         default: "",
@@ -255,12 +282,47 @@ const productSchema = new mongoose.Schema(
     },
 
     intelligenceMetadata: {
-      generatedAt: { type: Date, default: null },
-      intelligenceVersion: { type: String, default: null },
-      promptVersion: { type: String, default: null },
-      knowledgeBaseVersion: { type: String, default: null },
-      provider: { type: String, default: null },
-      model: { type: String, default: null },
+      generatedAt: {
+        type: Date,
+        default: null,
+      },
+
+      intelligenceVersion: {
+        type: String,
+        default: null,
+      },
+
+      promptVersion: {
+        type: String,
+        default: null,
+      },
+
+      knowledgeBaseVersion: {
+        type: String,
+        default: null,
+      },
+
+      provider: {
+        type: String,
+        default: null,
+      },
+
+      model: {
+        type: String,
+        default: null,
+      },
+    },
+
+    /*
+     * SHA-256 hash of the normalized complete ingredient formula.
+     *
+     * Used to determine whether existing Product Intelligence
+     * can safely be reused instead of calling Cerebras again.
+     */
+    intelligenceFormulaHash: {
+      type: String,
+      default: null,
+      index: true,
     },
 
     embedding: {

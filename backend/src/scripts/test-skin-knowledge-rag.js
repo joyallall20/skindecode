@@ -2,7 +2,7 @@
 
 import "dotenv/config";
 import mongoose from "mongoose";
-import { retrieveSkinKnowledge } from "../src/services/skinKnowledgeRagService.js";
+import { retrieveSkinKnowledge } from "../services/skinKnowledgeRagService.js";
 
 const MONGODB_URI =
   process.env.MONGODB_URI ||
